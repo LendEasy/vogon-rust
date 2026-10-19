@@ -5,6 +5,7 @@
 !requirements-runtime.txt
 !LICENSE
 !NOTICE
+!THIRD_PARTY.md
 !crates/
 !crates/**
 !examples/
@@ -12,6 +13,12 @@
 !tools/
 !tools/fetch_webrtcvad.py
 !Dockerfile
+!Dockerfile.al2023
+!deploy/
+!deploy/al2023/
+!deploy/al2023/README.md
+!deploy/al2023/INSTALL.md
+!deploy/al2023/vogon-rust.service
 **/target/**
 **/storage/**
 **/.env*

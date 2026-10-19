@@ -1,0 +1,21 @@
+[Unit]
+Description=Vogon Rust Gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=codelexin
+WorkingDirectory=/opt/vogon-rust/current
+Environment=PYTHONPATH=/opt/vogon-rust/venv/lib/python3.11/site-packages
+Environment=OPENBLAS_NUM_THREADS=1
+Environment=OMP_NUM_THREADS=1
+ExecStart=/opt/vogon-rust/current/vogon-gateway --env /etc/vogon-rust/gateway.env
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=480
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target

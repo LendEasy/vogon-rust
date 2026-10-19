@@ -21,6 +21,11 @@ playback and call-local timers run behind an application-facing Turn API.
 
 Deployment, retry settings and remaining acceptance gates: [operations guide](OPERATIONS.md).
 
+For an EC2 executable built locally in Docker, see the
+[Amazon Linux 2023 binary build and installation guide](deploy/al2023/README.md).
+The [EC2 cutover guide](deploy/al2023/INSTALL.md) covers installation as `codelexin`,
+the corrected Redis TLS artifact, systemd, switching from Python and rollback.
+
 Application business logic stays in your Turn service. The
 [echo example](examples/echo-turn-service/README.md) replies with what the caller said.
 

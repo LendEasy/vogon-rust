@@ -1,0 +1,75 @@
+# syntax=docker/dockerfile:1
+# Build natively in linux/amd64; audio-core intentionally rejects cross compilation.
+FROM rust:1.99.1-bookworm@sha256:e12566d5abc17a0da741628782cdb504b68b8961f5bfcf677936bf3e8b32de29 AS rust-toolchain
+
+FROM amazonlinux:2023@sha256:8ed3c0a996841537f75607e7d1de2114d8150391f75792e8da9268738547e73f AS runtime-base
+# The older EC2 snapshot has no published Docker tag. Synchronize ALL installed
+# packages, including glibc, to its repository before installing dependencies.
+ARG AL2023_RELEASE=2023.10.20260302
+RUN test "$(uname -m)" = x86_64 \
+    && dnf --releasever=${AL2023_RELEASE} distro-sync -y \
+    && dnf --releasever=${AL2023_RELEASE} install -y \
+       python3.11 python3.11-pip python3.11-libs speexdsp ca-certificates \
+    && dnf clean all
+COPY requirements-runtime.txt /tmp/requirements-runtime.txt
+RUN python3.11 -m venv /opt/vogon-rust/venv \
+    && /opt/vogon-rust/venv/bin/python -m pip install --no-cache-dir -r /tmp/requirements-runtime.txt
+ENV PYTHONPATH=/opt/vogon-rust/venv/lib/python3.11/site-packages \
+    OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1
+
+FROM runtime-base AS build
+ARG AL2023_RELEASE=2023.10.20260302
+RUN dnf --releasever=${AL2023_RELEASE} install -y \
+    gcc gcc-c++ make cmake perl pkgconf-pkg-config binutils \
+    python3.11-devel speexdsp-devel tar gzip \
+    && dnf clean all
+COPY --from=rust-toolchain /usr/local/cargo /usr/local/cargo
+COPY --from=rust-toolchain /usr/local/rustup /usr/local/rustup
+ENV PATH=/usr/local/cargo/bin:${PATH} \
+    CARGO_HOME=/usr/local/cargo RUSTUP_HOME=/usr/local/rustup \
+    PYO3_PYTHON=/opt/vogon-rust/venv/bin/python \
+    RUSTFLAGS="-C target-cpu=x86-64"
+WORKDIR /src
+COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
+COPY crates/ crates/
+COPY examples/ examples/
+COPY tools/fetch_webrtcvad.py tools/fetch_webrtcvad.py
+RUN /opt/vogon-rust/venv/bin/python tools/fetch_webrtcvad.py
+RUN cargo build --locked --release -j 2 \
+    -p vogon-service --bin vogon-gateway \
+    -p vogon-echo-turn-service --bin vogon-echo-turn-service
+ARG SOURCE_REVISION=unknown
+COPY LICENSE THIRD_PARTY.md ./
+COPY deploy/al2023/README.md deploy/al2023/README.md
+COPY deploy/al2023/INSTALL.md deploy/al2023/INSTALL.md
+COPY deploy/al2023/vogon-rust.service deploy/al2023/vogon-rust.service
+RUN mkdir -p /out/licenses \
+    && cp target/release/vogon-gateway target/release/vogon-echo-turn-service /out/ \
+    && strip --strip-debug /out/vogon-gateway /out/vogon-echo-turn-service \
+    && cp LICENSE THIRD_PARTY.md /out/licenses/ \
+    && cp crates/audio-core/WEBRTC_LICENSE /out/licenses/ \
+    && cp deploy/al2023/README.md /out/README.md \
+    && cp deploy/al2023/INSTALL.md deploy/al2023/vogon-rust.service /out/ \
+    && printf 'source_revision=%s\nrepository_snapshot=%s\narchitecture=x86_64\n' "$SOURCE_REVISION" "$AL2023_RELEASE" > /out/BUILD-INFO \
+    && rustc --version >> /out/BUILD-INFO \
+    && rpm -q glibc python3.11-libs speexdsp >> /out/BUILD-INFO \
+    && readelf --version-info /out/vogon-gateway > /out/ELF-VERSIONS.txt \
+    && cd /out && sha256sum vogon-gateway vogon-echo-turn-service > SHA256SUMS \
+    && tar -czf /vogon-rust-al2023-x86_64.tar.gz .
+
+# Clean runtime: no Rust compiler, headers or build packages are inherited.
+FROM runtime-base AS runtime
+COPY --from=build /out/vogon-gateway /out/vogon-echo-turn-service /usr/local/bin/
+RUN mkdir -p /data/recordings && chown -R 10001:10001 /data
+ENV RECORDINGS_PATH=/data/recordings GATEWAY_HOST=0.0.0.0 GATEWAY_PORT=8002
+USER 10001:10001
+WORKDIR /data
+EXPOSE 8002
+STOPSIGNAL SIGTERM
+ENTRYPOINT ["/usr/local/bin/vogon-gateway"]
+CMD ["--env", "/run/secrets/vogon.env"]
+
+# Export with --target artifacts --output type=local,dest=target/al2023-release.
+FROM scratch AS artifacts
+COPY --from=build /out/ /
+COPY --from=build /vogon-rust-al2023-x86_64.tar.gz /
