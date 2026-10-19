@@ -1,0 +1,20 @@
+/target/
+**/__pycache__/
+/prototypes/
+/crates/audio-core/vendor/webrtcvad/
+/validation/live/audio-cache/*.pcm
+/validation/live/results/**/*.wav
+# Credentials and machine-local configuration.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+# Generated reports can contain paths, tokens, audio and transcripts.
+/validation/**/results/
+/validation/live/audio-cache/
+*.log
+.venv/
+.pytest_cache/
+.ruff_cache/
+.DS_Store
