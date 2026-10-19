@@ -1,0 +1,20 @@
+[package]
+name = "vogon-front"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "Apache-2.0"
+repository = "https://github.com/LendEasy/vogon-rust"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip", "preserve_order"] }
+serde_yaml_ng = "0.10"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util", "test-util"] }
+rand = "0.9"
+vogon-clocks = { path = "../clocks" }
+vogon-barge-in = { path = "../barge-in" }
+vogon-playback = { path = "../playback" }
+vogon-contracts = { path = "../contracts" }
