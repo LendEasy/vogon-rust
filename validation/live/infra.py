@@ -197,11 +197,12 @@ class Proxy:
         try:
             remote = await self.client.ws_connect(upstream+'?'+request.query_string, headers={'Authorization':request.headers['Authorization']},autoping=True)
         except Exception as e:
-            self.rows.append({'case':case,'kind':kind,'error':type(e).__name__})
+            self.rows.append({'case':case,'kind':kind,'error':type(e).__name__,'status':getattr(e,'status',None)})
             await downstream.close(); return downstream
         sid = len(self.sockets)
         self.rows.append({'at':time.monotonic(),'case':case,'socket':sid,'kind':kind,'connection_query':dict(request.query)})
         entry = {'id':sid,'case':case,'kind':kind,'remote':remote,'downstream':downstream,'active':True}
+        received_audio = hashlib.sha256()
         self.sockets.append(entry)
         async def forward(source, target, direction):
             async for msg in source:
@@ -214,6 +215,8 @@ class Proxy:
                         await target.send_str(msg.data)
                         self.rows.append({'at':time.monotonic(),'case':case,'socket':sid,'fault':'duplicate_provider_event','event':value['event']})
                 elif msg.type == WSMsgType.BINARY:
+                    if kind == 'tts' and direction == 'receive':
+                        received_audio.update(msg.data)
                     row={'at':now,'case':case,'socket':sid,'kind':kind,'direction':direction,'bytes':len(msg.data)}
                     if kind=='stt':
                         pcm=audioop.ulaw2lin(msg.data,2) if request.query.get('encoding')=='mulaw' else msg.data
@@ -233,6 +236,7 @@ class Proxy:
             await asyncio.gather(*tasks,return_exceptions=True)
         finally:
             await remote.close();await downstream.close();entry['active']=False
+            entry['audio_sha256'] = received_audio.hexdigest()
         return downstream
 
 

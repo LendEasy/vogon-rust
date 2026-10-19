@@ -169,3 +169,47 @@ async fn failed_artifact_startup_never_reports_ready() {
     assert_eq!(s.readiness("text").await["ready"], false);
     tokio::fs::remove_file(path).await.unwrap();
 }
+
+#[tokio::test]
+async fn front_warm_failure_is_nonfatal_single_attempt_and_disabled_mode_is_silent() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let count = Arc::new(AtomicUsize::new(0));
+    let seen = count.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!(
+        "http://{}/v1/chat/completions",
+        listener.local_addr().unwrap()
+    );
+    let app = axum::Router::new().route(
+        "/v1/models",
+        axum::routing::get(move || {
+            let seen = seen.clone();
+            async move {
+                seen.fetch_add(1, Ordering::SeqCst);
+                axum::http::StatusCode::SERVICE_UNAVAILABLE
+            }
+        }),
+    );
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    for enabled in [false, true] {
+        let mut config = support::config();
+        config.settings["front_model_enabled"] = json!(enabled);
+        let mut service = Service::new(config, Arc::new(Memory::default())).unwrap();
+        Arc::get_mut(&mut service).unwrap().clients.front = Some(vogon_front::judge::Client {
+            http: vogon_front::http::Http::new(
+                &endpoint,
+                vogon_front::http::Key::new("fixture".into()).unwrap(),
+            )
+            .unwrap(),
+            model: "fixture".into(),
+            timeout_ms: 100,
+        });
+        let (a, b) = tokio::join!(service.startup(), service.startup());
+        a.unwrap();
+        b.unwrap();
+        assert_eq!(count.load(Ordering::SeqCst), usize::from(enabled));
+        assert_eq!(service.readiness("text").await["ready"], true);
+        service.shutdown().await.unwrap();
+    }
+    server.abort();
+}

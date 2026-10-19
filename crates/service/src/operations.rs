@@ -1,4 +1,4 @@
-//! Startup/readiness probes execute real native primitives without calling paid providers.
+//! Native readiness checks and bounded, non-generating provider connection warm-up.
 use crate::{Error, Result, host::Service};
 use pyo3::prelude::*;
 use serde_json::{Value, json};
@@ -50,6 +50,14 @@ impl Service {
         }
         self.artifact_ready
             .store(true, std::sync::atomic::Ordering::Release);
+        // Optional optimization: a failure must never prevent serving calls.
+        // Http owns single-flight warm-up state shared by front/judge clones.
+        if self.config.settings["front_model_enabled"] == true
+            && let Some(front) = &self.clients.front
+            && let Err(error) = front.http.warm(std::time::Duration::from_secs(2)).await
+        {
+            eprintln!("front_warm_failed: {}", error.code);
+        }
         Ok(checks)
     }
     /// Readiness includes current session-store access and optional requested caller mode.

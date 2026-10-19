@@ -37,6 +37,7 @@ pub struct Http {
     url: Url,
     key: Key,
     retry: Option<vogon_resilience::Policy>,
+    warm: std::sync::Arc<tokio::sync::OnceCell<Result<()>>>,
 }
 impl Http {
     /// Require HTTPS except loopback fixtures. Redirects and implicit retries are disabled.
@@ -62,7 +63,51 @@ impl Http {
             url,
             key,
             retry: None,
+            warm: Default::default(),
         })
+    }
+    /// Warm the same origin/pool with a bounded, non-generating models request.
+    /// Clones share one attempt, including failures; normal traffic remains independent.
+    pub async fn warm(&self, timeout: Duration) -> Result<()> {
+        self.warm
+            .get_or_init(|| async {
+                let mut url = self
+                    .url
+                    .join("models")
+                    .map_err(|_| Error::new("invalid_provider_url"))?;
+                // Completion endpoints end in /chat/completions; models is beside /chat.
+                if self.url.path().ends_with("/chat/completions") {
+                    url = self
+                        .url
+                        .join("../models")
+                        .map_err(|_| Error::new("invalid_provider_url"))?;
+                }
+                tokio::time::timeout(timeout, async {
+                    let mut response = self
+                        .client
+                        .get(url)
+                        .header(AUTHORIZATION, self.key.header()?)
+                        .timeout(timeout)
+                        .send()
+                        .await
+                        .map_err(classify)?;
+                    if !response.status().is_success() {
+                        return Err(Error::http(response.status().as_u16()));
+                    }
+                    let mut bytes = 0;
+                    while let Some(chunk) = response.chunk().await.map_err(classify)? {
+                        bytes += chunk.len();
+                        if bytes > 4 * 1024 * 1024 {
+                            return Err(Error::new("provider_response_too_large"));
+                        }
+                    }
+                    Ok(())
+                })
+                .await
+                .map_err(|_| Error::new("provider_timeout"))?
+            })
+            .await
+            .clone()
     }
     /// Set one retry owner for front/judge requests; the outer Jev loop then disables its legacy retries.
     pub fn with_retry(mut self, policy: vogon_resilience::Policy) -> Self {

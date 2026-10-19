@@ -79,7 +79,18 @@ pub struct HttpTurnClient {
 }
 impl HttpTurnClient {
     /// Create a client with no automatic redirects/retries. Deployment HTTP is allowed for internal services.
-    pub fn new(mut config: Config) -> Result<Self> {
+    pub fn new(config: Config) -> Result<Self> {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let http = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .retry(reqwest::retry::never())
+            .build()
+            .map_err(|_| Error::new("turn_client_failed"))?;
+        Self::with_http(config, http)
+    }
+    /// Share only the host's HTTP pool. Credentials, clocks, replay state and locks stay call-local.
+    /// The injected client must disable redirects and implicit retries, as `new` does.
+    pub fn with_http(mut config: Config, http: reqwest::Client) -> Result<Self> {
         let url =
             reqwest::Url::parse(&config.base_url).map_err(|_| Error::new("invalid_turn_url"))?;
         if !matches!(url.scheme(), "http" | "https")
@@ -91,12 +102,6 @@ impl HttpTurnClient {
             return Err(Error::new("invalid_turn_url"));
         }
         config.base_url = config.base_url.trim_end_matches('/').into();
-        let _ = rustls::crypto::ring::default_provider().install_default();
-        let http = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .retry(reqwest::retry::never())
-            .build()
-            .map_err(|_| Error::new("turn_client_failed"))?;
         Ok(Self {
             config,
             http,

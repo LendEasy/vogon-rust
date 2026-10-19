@@ -30,7 +30,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     config.openrouter_fallback.clear();
     config.stt_endpoint = fixture["stt"].as_str().ok_or("stt missing")?.into();
     config.tts_endpoint = fixture["tts"].as_str().ok_or("tts missing")?.into();
-    config.max_active = 4;
+    config.max_active = fixture["max_active"].as_u64().unwrap_or(4) as usize;
+    config.max_handshakes = fixture["max_handshakes"]
+        .as_u64()
+        .unwrap_or(config.max_handshakes as u64) as usize;
     config.shutdown_timeout = std::time::Duration::from_secs(25);
     let store: SharedStore = Arc::new(Memory::default());
     for record in fixture["phones"].as_array().ok_or("phones missing")? {

@@ -1313,3 +1313,67 @@ async fn zero_audio_completion_starts_line_retirement_window() {
     st.await.unwrap();
     tt.await.unwrap();
 }
+
+/// Neither handshake may complete until both TCP peers have connected. A sequential
+/// implementation deadlocks here, independently of machine speed or network latency.
+#[tokio::test]
+async fn speech_handshakes_overlap_and_failure_drops_the_other_socket() {
+    for fail in [None, Some(0), Some(1)] {
+        let (sl, su) = listen().await;
+        let (tl, tu) = listen().await;
+        let barrier = Arc::new(tokio::sync::Barrier::new(2));
+        let mut peers = Vec::new();
+        for (index, listener) in [sl, tl].into_iter().enumerate() {
+            let barrier = barrier.clone();
+            peers.push(tokio::spawn(async move {
+                let (socket, _) = listener.accept().await.unwrap();
+                barrier.wait().await;
+                if fail == Some(index) {
+                    // Let the other provider's actor start before rejecting this handshake.
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    return;
+                }
+                let mut socket = accept_async(socket).await.unwrap();
+                while let Some(message) = socket.next().await {
+                    match message {
+                        Ok(Message::Close(_)) | Err(_) => break,
+                        Ok(Message::Text(text)) if text.contains("CloseStream") => {
+                            let _ = socket.close(None).await;
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+            }));
+        }
+        let result = timeout(
+            Duration::from_secs(3),
+            Session::connect(
+                Config {
+                    mode: Mode::Browser,
+                    ..Default::default()
+                },
+                &settings(),
+                Box::new(Capture(Arc::new(Mutex::new(vec![])))),
+                Clock::default(),
+                &su,
+                &tu,
+            ),
+        )
+        .await
+        .expect("both handshakes must progress concurrently");
+        match result {
+            Ok((mut session, _)) => {
+                assert!(fail.is_none());
+                session.close().await.unwrap();
+            }
+            Err(_) => assert!(fail.is_some()),
+        }
+        for peer in peers {
+            timeout(Duration::from_secs(3), peer)
+                .await
+                .expect("peer socket leaked")
+                .unwrap();
+        }
+    }
+}

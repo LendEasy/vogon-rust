@@ -216,3 +216,58 @@ data-plane/.venv/bin/python vogon-rust/validation/live/report.py
 data-plane/.venv/bin/python -m unittest discover \
   -s vogon-rust/validation/live -p test_oracle.py
 ```
+
+## Concurrent calls against the standalone Rust echo example
+
+`concurrent_echo.py` starts the actual `examples/echo-turn-service` binary and
+production Rust Service/router/Driver through the validation host. The HTTP
+observer forwards requests and responses unchanged; it does not implement the
+Turn service. Text mode isolates gateway/Turn concurrency. `--live` sends
+TTS-generated caller speech through streaming STT and receives streaming TTS.
+`--phone` exercises the Twilio-protocol mu-law path, including native audio/AEC,
+without placing PSTN calls. No GPT calls are made.
+
+Build from `vogon-rust`, then run from the parent workspace:
+
+```sh
+cargo build --locked -p vogon-service --bin service-live-host -p vogon-echo-turn-service
+# From the parent workspace:
+data-plane/.venv/bin/python vogon-rust/validation/live/concurrent_echo.py \
+  --levels 1,32,128,512,1024 --out vogon-rust/validation/live/results/echo-text
+
+data-plane/.venv/bin/python vogon-rust/validation/live/concurrent_echo.py \
+  --live --levels 1,4,8,16,32 --out vogon-rust/validation/live/results/echo-voice
+
+data-plane/.venv/bin/python vogon-rust/validation/live/concurrent_echo.py \
+  --live --phone --levels 1,4,8,16,32 --out vogon-rust/validation/live/results/echo-phone
+```
+
+The harness raises admission limits only in its fixture; production defaults are
+unchanged. Each batch opens all callers before two synchronized exchange rounds.
+Live rounds wait for all remote provider sockets, keep 20 ms input flowing while
+receiving output, and verify distinct reference numbers, two committed replies,
+terminal deliveries, EndCall and provider socket cleanup. Browser output is also
+SHA-256 compared against the concatenated provider PCM for each call. Full output
+WER is retained. The independent recognizer occasionally mishears the fixed
+“You said” prefix; exact recognition of the caller-content suffix is separately reported for
+diagnosis, but does not override the WER threshold. `strict_output_failures`
+retains this count. The first failed run is retained for comparison. A failure
+limited to recognition of this prefix is not itself evidence of a capacity limit.
+
+Reports include HTTP connection IDs, remote socket counts, all-ready time,
+first-output latency, input media gaps, audio/transcript evidence, source hashes
+and subprocess exits. `session_ready_ms` is the client protocol acknowledgement,
+not proof that speech handshakes finished; `all_ready_ms` waits for those sockets.
+All artifacts are local and ignored. First-output latency includes endpointing,
+provider generation, scheduling and the observation proxy, not just Rust CPU.
+
+These are short, two-turn, debug-build tests on a shared development host. They
+establish a tested concurrency lower bound, not the maximum sustainable capacity,
+long-call memory limit, or a production SLO. Browser calls bypass the phone DSP
+path. Text calls do not exercise speech providers. Recording, front generation,
+ambience and external application reasoning are disabled. The local Python
+observer/load generator can itself limit higher-count runs. Capacity sizing still
+requires release-build sustained traffic with production features enabled.
+
+Measured 2026-10-19 results and provider-limit evidence are in
+[REPORT.md](REPORT.md#persistent-connections-and-concurrent-echo-calls--2026-10-19).

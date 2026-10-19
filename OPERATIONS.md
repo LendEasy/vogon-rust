@@ -130,6 +130,44 @@ termination grace accordingly. In-flight blocking audio encoding cannot be
 preempted after `spawn_blocking` starts. Shutdown is bounded best effort; it does
 not promise durable recovery after SIGKILL or machine failure.
 
+## Connection ownership and warm-up
+
+| Connection | Owner and lifetime |
+| --- | --- |
+| STT and TTS WebSockets | One of each per audio call; handshakes start concurrently. Reused across turns, closed at teardown. If either handshake fails, the other future/client is dropped and its socket task is cancelled. |
+| Turn API HTTP | Service-owned reqwest pool shared across calls. Each HttpTurnClient retains its own bearer binding, clock epoch, ordering mutex and started state. HTTP/1.1 concurrent requests can use multiple TCP sockets; a pool is not a single socket. |
+| Transfer Redis | One lazily initialized ConnectionManager per shared Store, including its clones. Concurrent first use initializes it once. Reads may retry; CAS commands are never automatically replayed after an ambiguous write. Reconnection replaces a lost socket. |
+| Call-state Redis | Existing service-owned ConnectionManager, independent of the transfer manager. |
+| Front / judge HTTP | Existing shared provider pool. When front generation is enabled and configured, startup attempts GET /v1/models on that pool once, consuming the response to make the connection reusable. The attempt is bounded to two seconds, performs no generation, and failure is logged without failing startup. Readiness does not repeat it. |
+| Twilio / transfer reporting / transfer-line REST TTS | Existing host/transfer-manager HTTP pools. |
+| S3 | Existing service-owned, lazily initialized AWS SDK client. |
+
+Only network clients/pools are shared. Call clocks, event counters, speculative
+revisions, credentials and serialization remain call-local. Idle eviction, peer
+closure or concurrent demand can create new HTTP connections. Warming reduces
+cold-start work only while the warmed connection remains available; it does not
+promise that the next request uses the same socket.
+
+`HttpTurnClient::new` remains available for standalone consumers; the service uses
+`with_http` to inject its existing pool with redirects and hidden retries disabled.
+The warm-up uses the same pool as real front completions; it does not warm JEV or
+external application-model clients. STT/TTS still require independent sessions for
+each call and cannot share provider speech state across calls.
+
+Connection tests count accepted TCP connections, prove that another call progresses
+while one call's HTTP request is held, check per-call auth/epoch isolation, gate
+both speech handshakes before either may complete, and exercise failure cleanup.
+The real-Redis test verifies a single connection across 32 racing callers, exactly
+one CAS winner, and recovery after the server kills the connection:
+
+```sh
+REDIS_TEST_SERVER=/path/to/redis-server cargo test -p vogon-escalation \
+  --test redis_pool -- --include-ignored
+```
+
+The concurrent echo harness and its measurement limits are documented in
+[validation/live/README.md](validation/live/README.md).
+
 ## Performance and deployment limits
 
 Input/event collection remains independent of awaited application HTTP and TTS.

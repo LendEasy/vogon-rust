@@ -374,53 +374,57 @@ impl Session {
         if config.mode != Mode::Text {
             let settings = settings.ok_or_else(|| Error::new("missing_speech_settings"))?;
             let phone = config.mode == Mode::Twilio;
-            let (client, events) = if let Some((live, key)) = &config.live {
-                let (client, events) = config
-                    .stt_retry
-                    .run(
-                        || {
-                            LiveClient::connect(
-                                stt_endpoint,
-                                live.clone(),
-                                key.clone(),
-                                clock.clone(),
-                            )
+            let open_stt = async {
+                let result = if let Some((live, key)) = &config.live {
+                    let (client, events) = config
+                        .stt_retry
+                        .run(
+                            || {
+                                LiveClient::connect(
+                                    stt_endpoint,
+                                    live.clone(),
+                                    key.clone(),
+                                    clock.clone(),
+                                )
+                            },
+                            vogon_speech_providers::wire::retryable,
+                        )
+                        .await?;
+                    (Listener::Live(client), events)
+                } else {
+                    let (client, events) = SttClient::connect_with_retry(
+                        stt_endpoint,
+                        if phone {
+                            settings.phone.clone()
+                        } else {
+                            settings.browser.clone()
                         },
-                        vogon_speech_providers::wire::retryable,
+                        settings.key.clone(),
+                        clock.clone(),
+                        config.stt_retry.clone(),
                     )
                     .await?;
-                (Listener::Live(client), events)
-            } else {
-                let (client, events) = SttClient::connect_with_retry(
-                    stt_endpoint,
-                    if phone {
-                        settings.phone.clone()
-                    } else {
-                        settings.browser.clone()
-                    },
-                    settings.key.clone(),
-                    clock.clone(),
-                    config.stt_retry.clone(),
-                )
-                .await?;
-                (Listener::Flux(client), events)
+                    (Listener::Flux(client), events)
+                };
+                Ok::<_, Error>(result)
             };
+            let open_tts = TtsClient::connect_with_retry(
+                tts_endpoint,
+                if phone {
+                    settings.phone_tts.clone()
+                } else {
+                    settings.tts.clone()
+                },
+                settings.key.clone(),
+                clock.clone(),
+                config.tts_retry.clone(),
+            );
+            // Both handshakes progress independently. On failure the other future/result
+            // is dropped, closing its socket/actor rather than leaving a half-open call.
+            let ((client, events), tts_client) = tokio::try_join!(open_stt, open_tts)?;
             stt = Some(client);
             output = Some(events);
-            tts = Some(
-                TtsClient::connect_with_retry(
-                    tts_endpoint,
-                    if phone {
-                        settings.phone_tts.clone()
-                    } else {
-                        settings.tts.clone()
-                    },
-                    settings.key.clone(),
-                    clock.clone(),
-                    config.tts_retry.clone(),
-                )
-                .await?,
-            );
+            tts = Some(tts_client);
         }
         let observer = sink.observer();
         let (writer, writer_task) =

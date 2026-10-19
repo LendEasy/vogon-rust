@@ -385,14 +385,14 @@ impl Service {
                 .map_err(|_| Error::new("invalid_speech_settings"))?,
             )
         };
-        let api = Arc::new(HttpTurnClient::new(ApiConfig::resolve(
+        let api = Arc::new(HttpTurnClient::with_http(ApiConfig::resolve(
             &self.config.settings,
             &json!({"turn_service":{"base_url":record.app_base_url,"auth_token":record.app_auth_token}}),
             // Driver/Session share a new per-call Clock whose origin is zero.
             // Wall time belongs only to persisted records and client wire `ts`.
             // Subtracting utc_now here corrupts Turn API events into negative epochs.
             0.0,
-        )?)?.with_retry(self.config.retries.turn.clone()).with_metrics(self.metrics.clone()));
+        )?, self.http.clone())?.with_retry(self.config.retries.turn.clone()).with_metrics(self.metrics.clone()));
         let (outbound, mut inbound) = socket.split();
         let clock = Clock::default();
         let capture = crate::recording::Capture::with_metrics(

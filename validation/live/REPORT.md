@@ -98,3 +98,78 @@ published under this directory; it requires the environment documented in
 The first returned audio measurement of 694 ms was one observation, not a latency
 percentile, benchmark or Rust speedup claim. Publication does not resolve the
 remaining acceptance gaps above.
+
+## Persistent connections and concurrent echo calls — 2026-10-19
+
+Implemented service-wide Turn HTTP pooling with call-local credentials/locks/clock
+state, a shared lazy transfer-Redis ConnectionManager, one bounded non-generating
+front-provider warm-up, and concurrent STT/TTS handshakes with failure cleanup.
+See [OPERATIONS.md](../../OPERATIONS.md#connection-ownership-and-warm-up).
+
+The standalone Rust echo example handled these measured loads on this shared
+16-logical-CPU x86_64 host, using debug binaries. Each successful call exchanged
+two distinct-reference utterances; live calls used generated input speech, actual
+streaming STT/TTS, and independent output transcription. All passing rows below
+had zero full-output WER failures at the existing 0.25 threshold.
+
+| Path | Simultaneous calls | Replies | Result | Speech sockets |
+| --- | ---: | ---: | --- | --- |
+| Text | 1, 32, 128, 512 | 1,346 total | Pass | None |
+| Text | 1,024 | 2,048 | Pass | None |
+| Browser PCM | 16, 32 | 96 total | Pass; provider/received PCM SHA-256 equal for every call | One STT + one TTS per call |
+| Phone mu-law / native audio | 1, 4, 8, 16, 32 | 122 total | Pass | One STT + one TTS per call |
+| Phone mu-law / native audio | **45** | **90** | **Pass** | 45 STT + 45 TTS |
+| Phone | 46 | No speech sent | Provider boundary: extra TTS handshake returned **HTTP 429** | 46 STT + 45 TTS |
+| Phone | 64 | No speech sent | Only 45 TTS connections opened; batch stopped before speech | 64 STT + 45 TTS |
+
+The harness waits for every remote speech connection before sending utterances.
+Consequently the failed boundary batches do not claim partial conversation success.
+All successful and boundary batches sent EndCall for every opened call, released
+provider sockets, and stopped both processes with exit code zero. No PSTN calls,
+GPT Live requests, external app reasoning, front generation, ambience or recording
+were included. The phone path exercised AEC/native audio but did not inject echo;
+this run is not an additional AEC effectiveness benchmark.
+
+At 45 phone calls, mean speech-end-to-first-output was 2.19 s, p95 2.35 s. This
+includes the configured 1.8 s STT endpointing window, provider processing, local
+observer and scheduling overhead. Mean observed echo HTTP time was 3.70 ms
+(p95 23.60 ms). Neither is isolated Rust CPU latency. The input generator's 20 ms
+frame cadence had p95 20.72 ms and maximum 52.07 ms; those are send-time gaps,
+not measurements of per-frame DSP completion. Phone startup includes the harness's
+fixed one-second wait and must not be used as a provider handshake benchmark.
+At 1,024 text calls, p95 first output was 334 ms; this includes typing policy and
+load-generator/proxy overhead.
+
+**Practical test sizing:** 45 is the largest fully passing live phone batch;
+46 hit the current credential/account's observed streaming-TTS quota. Use 32 for
+routine concurrent live tests to leave quota headroom; reserve 45 for boundary
+checks with no competing provider sessions. Production admission defaults remain
+64 active calls / 128 handshakes. Those defaults do not account for this observed
+provider limit. Rust's maximum sustained voice capacity remains unmeasured;
+release-build soak tests with recording and production features are still needed.
+1,024 is a verified short text-call lower bound, not a maximum or a voice capacity.
+
+Evidence (local ignored artifacts):
+
+- `results/echo-concurrent-text-01/report.json` and `echo-concurrent-text-02/report.json`
+- `results/echo-concurrent-live-02/report.json` (all browser audio digest checks)
+- `results/echo-concurrent-phone-01/report.json` (phone ramp through 32)
+- `results/echo-concurrent-phone-boundary/report.json` and `provider-events.json`
+  (45 full conversations; explicit TTS 429 at 46)
+- `results/echo-concurrent-phone-02/report.json` (64-call setup boundary)
+- Each run includes source/binary hashes, raw Turn/provider traces, caller WAVs and
+  `process-exits.json`; `reference-audit.json` checks distinct reference numbers.
+
+The first browser ramp, `echo-concurrent-live-01`, failed at 16 because the
+independent recognizer rendered “You said” as “USAD” / “Use SAD” in two clips.
+Both clips had exactly the provider's byte count and the correct caller content.
+The later 16/32 run added per-call SHA-256 verification and passed the original
+full-WER threshold without exceptions. Retain this initial failure; it is not
+claimed as a clean pass or evidence of Rust saturation.
+
+Focused regression validation: **168 Rust tests passed** across front,
+orchestration, escalation, transport, service and echo example, including the
+explicit real-Redis connection/reconnect/CAS test. Three Python oracle tests
+passed. Formatting checks and the repository's selected-package Clippy command
+(`--no-deps --all-targets -- -D warnings`) passed. No secrets were copied and no
+production admission limits were changed.

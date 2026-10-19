@@ -222,3 +222,68 @@ async fn configured_backoff_retries_throttle_with_identical_replay_identity() {
         assert!(seen.iter().all(|r| r.1 == seen[0].1));
     }
 }
+
+#[path = "../../front/tests/support/pool.rs"]
+mod pool;
+
+#[tokio::test]
+async fn shared_pool_reuses_tcp_without_sharing_auth_clock_or_call_lock() {
+    let mut s = pool::Server::start().await;
+    let http = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
+        .build()
+        .unwrap();
+    let make = |key: &str, epoch| {
+        Arc::new(
+            HttpTurnClient::with_http(
+                Config {
+                    base_url: s.url.clone(),
+                    api_key: key.into(),
+                    timeout: Duration::from_secs(5),
+                    retry_delays: vec![],
+                    epoch,
+                },
+                http.clone(),
+            )
+            .unwrap(),
+        )
+    };
+    let a = make("call-a-secret", 100.);
+    let b = make("call-b-secret", 101.);
+    for (client, expected_auth, expected_at) in [
+        (a.clone(), "call-a-secret", 2.),
+        (b.clone(), "call-b-secret", 1.),
+    ] {
+        let task = tokio::spawn(async move { client.process(req()).await });
+        let seen = s.next().await;
+        assert_eq!(
+            seen.connection, 1,
+            "separate call clients should reuse idle TCP"
+        );
+        assert!(seen.head.contains(expected_auth));
+        assert_eq!(seen.body["events"][0]["at"], expected_at);
+        seen.reply.send(()).unwrap();
+        task.await.unwrap().unwrap();
+    }
+    let a1 = a.clone();
+    let first = tokio::spawn(async move { a1.process(req()).await });
+    let held = s.next().await;
+    let second = tokio::spawn(async move { a.process(req()).await });
+    let independent = tokio::spawn(async move { b.process(req()).await });
+    let other = s.next().await;
+    assert!(other.head.contains("call-b-secret"));
+    assert_ne!(other.connection, held.connection);
+    other.reply.send(()).unwrap();
+    independent.await.unwrap().unwrap();
+    assert!(
+        s.requests.try_recv().is_err(),
+        "same-call request must remain serialized"
+    );
+    held.reply.send(()).unwrap();
+    first.await.unwrap().unwrap();
+    let resumed = s.next().await;
+    assert!(resumed.head.contains("call-a-secret"));
+    resumed.reply.send(()).unwrap();
+    second.await.unwrap().unwrap();
+}
