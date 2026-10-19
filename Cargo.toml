@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/contracts", "crates/configuration", "crates/audio-core", "crates/playback", "crates/barge-in", "crates/audio-runtime", "crates/clocks", "crates/speech-providers", "crates/front", "crates/transport", "crates/orchestration"]
+members = ["crates/contracts", "crates/configuration", "crates/audio-core", "crates/playback", "crates/barge-in", "crates/audio-runtime", "crates/clocks", "crates/speech-providers", "crates/front", "crates/transport", "crates/orchestration", "crates/service"]
 exclude = ["prototypes/dsp-kernels", "prototypes/numpy-bridge"]
 resolver = "3"
 
