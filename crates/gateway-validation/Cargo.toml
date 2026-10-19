@@ -1,0 +1,15 @@
+[package]
+name = "vogon-gateway-validation"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "Apache-2.0"
+repository = "https://github.com/LendEasy/vogon-rust"
+
+[dependencies]
+vogon-contracts = { path = "../contracts" }
+vogon-configuration = { path = "../configuration" }
+vogon-playback = { path = "../playback" }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+vogon-barge-in = { path = "../barge-in" }
+serde = { version = "1", features = ["derive"] }
