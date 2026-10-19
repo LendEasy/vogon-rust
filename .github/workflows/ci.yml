@@ -1,0 +1,45 @@
+name: Native checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      OPENBLAS_NUM_THREADS: "1"
+      OMP_NUM_THREADS: "1"
+      AWS_EC2_METADATA_DISABLED: "true"
+      REDIS_SERVER_BIN: /usr/bin/redis-server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install native and retained Python dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential pkg-config libspeexdsp-dev redis-server
+          python -m pip install -r requirements-runtime.txt
+          python tools/fetch_webrtcvad.py
+          echo "PYO3_PYTHON=$(command -v python)" >> "$GITHUB_ENV"
+          echo "PYTHONPATH=$(python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')" >> "$GITHUB_ENV"
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
+      - name: Build the gateway and examples
+        run: cargo build --locked --workspace
+      - name: Native tests (no external provider calls)
+        run: cargo test --locked --workspace -- --skip live_
+      - name: Format maintained service and orchestration crates
+        run: cargo fmt -p vogon-service -p vogon-orchestration -p vogon-clocks -p vogon-transport -p vogon-front -p vogon-echo-turn-service -- --check
+      - name: Scoped Clippy
+        run: cargo clippy --locked -p vogon-service -p vogon-orchestration -p vogon-clocks -p vogon-echo-turn-service --all-targets --no-deps -- -D warnings
+      - name: Rustdoc links
+        env:
+          RUSTDOCFLAGS: "-D rustdoc::broken_intra_doc_links"
+        run: cargo doc --locked --workspace --no-deps
