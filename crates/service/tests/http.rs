@@ -264,10 +264,16 @@ fn bootstrap_precedence_limits_and_invalid_store_fail_before_listening() {
     )
     .unwrap();
     assert!(host.clients.jev.is_some());
+    assert!(
+        Config::resolve(
+            &json!({"GATEWAY_SESSION_STORE":"redis","REDIS_CLUSTER_MODE":"true"}),
+            &json!({})
+        )
+        .is_ok()
+    );
     for env in [
         json!({"GATEWAY_MAX_ACTIVE_CALLS":"0"}),
         json!({"GATEWAY_SESSION_STORE":"unknown"}),
-        json!({"GATEWAY_SESSION_STORE":"redis","REDIS_CLUSTER_MODE":"true"}),
     ] {
         assert!(Config::resolve(&env, &json!({})).is_err());
     }

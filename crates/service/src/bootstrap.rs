@@ -52,9 +52,6 @@ impl Config {
         if !matches!(gateway["session_store"].as_str(), Some("memory" | "redis")) {
             return Err(Error::new("invalid_session_store"));
         }
-        if gateway["session_store"] == "redis" && settings["redis_cluster_mode"] == true {
-            return Err(Error::new("redis_cluster_not_supported"));
-        }
         let profiles = vogon_configuration::read_overrides(Path::new(
             gateway["tenant_profiles"].as_str().unwrap_or(""),
         ))

@@ -73,9 +73,12 @@ impl Service {
             .ok()
         };
         let transfer_store = if config.gateway["session_store"] == "redis" {
-            vogon_escalation::Store::redis(config.settings["redis_url"].as_str().unwrap_or(""))
-                .map_err(|e| Error::new(e.0))?
-                .with_retry(config.retries.redis.clone())
+            vogon_escalation::Store::redis_mode(
+                config.settings["redis_url"].as_str().unwrap_or(""),
+                config.settings["redis_cluster_mode"] == true,
+            )
+            .map_err(|e| Error::new(e.0))?
+            .with_retry(config.retries.redis.clone())
         } else {
             vogon_escalation::Store::default()
         };

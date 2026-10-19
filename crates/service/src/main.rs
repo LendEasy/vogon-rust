@@ -29,10 +29,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::load(&path)?;
     let store: SharedStore = if config.gateway["session_store"] == "redis" {
         Arc::new(
-            Redis::connect_with_retry(
+            Redis::connect_mode(
                 config.settings["redis_url"].as_str().unwrap(),
                 Ttl::default(),
                 config.retries.redis.clone(),
+                config.settings["redis_cluster_mode"] == true,
             )
             .await?,
         )

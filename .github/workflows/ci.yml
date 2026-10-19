@@ -24,7 +24,7 @@ jobs:
       - name: Install native and retained Python dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends build-essential pkg-config libspeexdsp-dev redis-server
+          sudo apt-get install -y --no-install-recommends build-essential pkg-config libspeexdsp-dev redis-server openssl
           python -m pip install -r requirements-runtime.txt
           python tools/fetch_webrtcvad.py
           echo "PYO3_PYTHON=$(command -v python)" >> "$GITHUB_ENV"
@@ -35,10 +35,16 @@ jobs:
         run: cargo build --locked --workspace
       - name: Native tests (no external provider calls)
         run: cargo test --locked --workspace -- --skip live_
+      - name: Redis TLS stores and certificate rejection (local real Redis)
+        run: python validation/redis_tls/run.py
+      - name: Three-primary Redis cluster over plaintext and TLS
+        run: |
+          python validation/redis_cluster/run.py
+          python validation/redis_cluster/run.py --tls
       - name: Format maintained service and orchestration crates
-        run: cargo fmt -p vogon-service -p vogon-orchestration -p vogon-clocks -p vogon-transport -p vogon-front -p vogon-echo-turn-service -p vogon-artifacts -p vogon-escalation -p vogon-resilience -p vogon-observability -p vogon-speech-providers -- --check
+        run: cargo fmt -p vogon-redis -p vogon-service -p vogon-orchestration -p vogon-clocks -p vogon-transport -p vogon-front -p vogon-echo-turn-service -p vogon-artifacts -p vogon-escalation -p vogon-resilience -p vogon-observability -p vogon-speech-providers -- --check
       - name: Scoped Clippy
-        run: cargo clippy --locked -p vogon-service -p vogon-orchestration -p vogon-clocks -p vogon-echo-turn-service -p vogon-artifacts -p vogon-escalation -p vogon-resilience -p vogon-observability -p vogon-speech-providers -p vogon-front -p vogon-transport --all-targets --no-deps -- -D warnings
+        run: cargo clippy --locked -p vogon-redis -p vogon-service -p vogon-orchestration -p vogon-clocks -p vogon-echo-turn-service -p vogon-artifacts -p vogon-escalation -p vogon-resilience -p vogon-observability -p vogon-speech-providers -p vogon-front -p vogon-transport --all-targets --no-deps -- -D warnings
       - name: Rustdoc links
         env:
           RUSTDOCFLAGS: "-D rustdoc::broken_intra_doc_links"

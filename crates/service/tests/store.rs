@@ -15,16 +15,28 @@ fn record(tenant: &str, id: &str, token: &str) -> Record {
     )
     .unwrap()
 }
-struct Server(Child, String);
+struct Server(Option<Child>, String);
 impl Drop for Server {
     fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
+        if let Some(child) = &mut self.0 {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
 }
 async fn backend(redis: bool, ttl: Ttl) -> (SharedStore, Option<Server>) {
     if !redis {
         return (Arc::new(Memory::new(ttl)), None);
+    }
+    if let Ok(url) = std::env::var("VOGON_TEST_REDIS_CLUSTER_URL") {
+        return (
+            Arc::new(
+                Redis::connect_mode(&url, ttl, vogon_resilience::Policy::default(), true)
+                    .await
+                    .unwrap(),
+            ),
+            Some(Server(None, url)),
+        );
     }
     let path = std::env::var_os("REDIS_SERVER_BIN")
         .map(std::path::PathBuf::from)
@@ -53,7 +65,7 @@ async fn backend(redis: bool, ttl: Ttl) -> (SharedStore, Option<Server>) {
         .spawn()
         .expect("build tools/redis-stable or provide Redis test binary");
     let url = format!("redis://127.0.0.1:{port}");
-    let server = Server(child, url.clone());
+    let server = Server(Some(child), url.clone());
     for _ in 0..100 {
         if tokio::net::TcpStream::connect(("127.0.0.1", port))
             .await
@@ -343,8 +355,16 @@ fn all_49_lifecycle_transitions_have_explicit_acceptance_and_stable_timestamps()
 async fn transfer_redis_cas_is_atomic_across_clients() {
     let (_sessions, server) = backend(true, Ttl::default()).await;
     let url = &server.as_ref().unwrap().1;
-    let a = vogon_escalation::Store::redis(url).unwrap();
-    let b = vogon_escalation::Store::redis(url).unwrap();
+    let a = vogon_escalation::Store::redis_mode(
+        url,
+        std::env::var_os("VOGON_TEST_REDIS_CLUSTER_URL").is_some(),
+    )
+    .unwrap();
+    let b = vogon_escalation::Store::redis_mode(
+        url,
+        std::env::var_os("VOGON_TEST_REDIS_CLUSTER_URL").is_some(),
+    )
+    .unwrap();
     let ttl = Duration::from_millis(200);
     assert!(
         a.cas("gw:rust:esc:test", None, Some(b"old"), ttl)

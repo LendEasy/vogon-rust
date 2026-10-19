@@ -689,6 +689,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "crc16"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "338089f42c427b86394a5ee60ff321da23a5c89c9d89514c829687b26359fcff"
+
+[[package]]
 name = "crc32fast"
 version = "1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1648,16 +1654,23 @@ dependencies = [
  "bytes",
  "cfg-if",
  "combine",
+ "crc16",
  "futures-channel",
+ "futures-sink",
  "futures-util",
  "itoa",
+ "log",
  "num-bigint",
  "percent-encoding",
  "pin-project-lite",
+ "rand",
+ "rustls",
+ "rustls-native-certs",
  "ryu",
  "sha1_smol",
  "socket2",
  "tokio",
+ "tokio-rustls",
  "tokio-util",
  "url",
 ]
@@ -2533,6 +2546,7 @@ dependencies = [
  "tokio",
  "uuid",
  "vogon-contracts",
+ "vogon-redis",
  "vogon-resilience",
 ]
 
@@ -2605,6 +2619,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "vogon-redis"
+version = "0.1.0"
+dependencies = [
+ "redis",
+ "rustls",
+ "serde_json",
+ "tokio",
+ "vogon-resilience",
+]
+
+[[package]]
 name = "vogon-resilience"
 version = "0.1.0"
 dependencies = [
@@ -2644,6 +2669,7 @@ dependencies = [
  "vogon-front",
  "vogon-observability",
  "vogon-orchestration",
+ "vogon-redis",
  "vogon-resilience",
  "vogon-speech-providers",
  "vogon-transport",

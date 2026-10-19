@@ -71,6 +71,50 @@ background durable upload queue. See [artifact ownership](crates/artifacts/READM
 
 ## Startup, readiness and metrics
 
+Redis accepts `redis://` and TLS `rediss://` URLs in both the call-state and
+transfer stores. TLS uses Rustls with the system CA trust store and verifies the
+server hostname; keep `ca-certificates` installed. Standard AWS certificates need
+no custom CA setting. For a private CA, `SSL_CERT_FILE` can supply the trusted PEM
+bundle. Percent-encode reserved characters in URL usernames/passwords. Automatic
+IAM-token generation/refresh is not implemented.
+
+Set `REDIS_CLUSTER_MODE=true` for ElastiCache Serverless or a cluster-mode-enabled
+deployment. Both session and transfer stores use a topology-aware async client.
+Standalone mode remains the default. Cluster session metadata uses the new
+`gw:{vogon-sessions-v1}:...` namespace: the literal hash tag co-locates records,
+token/SID indexes and claims so Lua CAS remains atomic. Existing standalone key
+names are unchanged. Drain old calls before switching; there is no import or
+rolling ownership across Python/standalone and cluster namespaces.
+
+This choice limits session metadata throughput to one Redis shard. It does not
+serialize audio processing or independent call tasks. Transfer values use
+single-key CAS and remain distributed across slots. This is a compatibility fix,
+not a claim of horizontally sharded session-write throughput.
+
+The shared `vogon-redis` connector initializes one client per store and preserves
+connection pooling. Cluster command retries are disabled because redis-rs can
+otherwise replay mutations after ambiguous I/O failure. Safe reads and connection
+establishment retain bounded exponential retries. Topology discovery routes
+commands to their slot owner; a mutation encountering a redirect/failover may
+fail explicitly instead of being automatically replayed. Mutation reconciliation
+and failover/resharding acceptance remain follow-up work.
+
+Redis failures now log `redis_error` with an operation and an allowlisted category
+(`crossslot`, `permission_denied`, `read_only`, `authentication_failed`, `moved`,
+`ask`, `cluster_down`, `try_again`, `timeout`, `connection_failed`, `rejected`).
+The original server text, URLs, keys and values are never logged. Public HTTP
+errors remain sanitized. Readiness still performs a read; it does not prove Lua
+or write ACL permissions.
+
+The initial Amazon Linux binary built from `707021a` omitted Redis TLS features,
+causing valid `rediss://` URLs to fail as `invalid_redis_url` before connecting.
+The corrected build enables Tokio/Rustls support in both clients and initializes
+the crypto provider before the startup store connection. Existing plain Redis
+connections remain supported. Do not change an encrypted endpoint to `redis://`
+to work around an older binary. The local `validation/redis_tls/run.py` test uses
+real Redis behind a TLS terminator and verifies trusted authenticated operations,
+atomic claims/CAS, and rejection of wrong hostnames, untrusted CAs and passwords.
+
 `vogon-gateway --check --env PATH` resolves configuration, connects the session
 store, executes native probes and prints text-mode readiness. The native probe
 actually imports NumPy/audioop, decodes silence, performs a NumPy reduction, and

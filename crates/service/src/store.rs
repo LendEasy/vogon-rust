@@ -1,4 +1,4 @@
-//! Atomic session records and exclusive media claims in memory or standalone Redis.
+//! Atomic session records and exclusive media claims in memory, standalone Redis or a routed Redis cluster.
 //! Redis CAS writes complete Rust-serialized JSON, preserving empty arrays exactly.
 use crate::{
     Error, Future, Result, boxed,
@@ -237,14 +237,15 @@ impl Store for Memory {
     }
 }
 
-/// Standalone Redis backend; scripts use existing gw:* key layout and atomic CAS.
+/// Redis session store. Cluster mode co-locates metadata for atomic cross-index CAS.
 pub struct Redis {
-    connection: redis::aio::ConnectionManager,
+    connection: vogon_redis::Client,
+    cluster: bool,
     ttl: Ttl,
     retry: vogon_resilience::Policy,
 }
 impl Redis {
-    /// Connect without logging URLs or passwords. Cluster mode is rejected by bootstrap.
+    /// Connect to standalone Redis without logging URLs or passwords.
     pub async fn connect(url: &str, ttl: Ttl) -> Result<Self> {
         Self::connect_with_retry(url, ttl, vogon_resilience::Policy::default()).await
     }
@@ -254,30 +255,53 @@ impl Redis {
         ttl: Ttl,
         retry: vogon_resilience::Policy,
     ) -> Result<Self> {
-        let client = redis::Client::open(url).map_err(|_| Error::new("invalid_redis_url"))?;
-        let config = redis::aio::ConnectionManagerConfig::new()
-            .set_number_of_retries(retry.attempts.saturating_sub(1))
-            .set_exponent_base(2)
-            .set_factor(retry.initial_ms)
-            .set_max_delay(retry.max_ms);
-        let connection = tokio::time::timeout(
-            Duration::from_secs(15),
-            client.get_connection_manager_with_config(config),
-        )
-        .await
-        .map_err(|_| Error::new("redis_timeout"))?
-        .map_err(|_| Error::new("redis_unavailable"))?;
+        Self::connect_mode(url, ttl, retry, false).await
+    }
+    /// Enable cluster routing and a dedicated same-slot session namespace when requested.
+    /// All metadata shares one slot: atomicity is preserved at a one-shard write ceiling.
+    pub async fn connect_mode(
+        url: &str,
+        ttl: Ttl,
+        retry: vogon_resilience::Policy,
+        cluster: bool,
+    ) -> Result<Self> {
+        let connection = vogon_redis::Client::new(url, cluster).map_err(|e| {
+            vogon_redis::log_error("session_config", &e);
+            Error::new("invalid_redis_url")
+        })?;
+        tokio::time::timeout(Duration::from_secs(15), connection.connect(&retry))
+            .await
+            .map_err(|_| Error::new("redis_timeout"))?
+            .map_err(|e| {
+                vogon_redis::log_error("session_connect", &e);
+                Error::new("redis_unavailable")
+            })?;
         Ok(Self {
             connection,
+            cluster,
             ttl,
             retry,
         })
     }
-    fn key(k: &Key) -> String {
-        format!("gw:{}:call:{}", k.0, k.1)
+    fn prefix(&self) -> &'static str {
+        if self.cluster {
+            "gw:{vogon-sessions-v1}"
+        } else {
+            "gw"
+        }
     }
-    fn index(provider: bool, id: &str) -> String {
-        format!("gw:idx:{}:{id}", if provider { "sid" } else { "token" })
+    fn key(&self, k: &Key) -> String {
+        format!("{}:{}:call:{}", self.prefix(), k.0, k.1)
+    }
+    fn index(&self, provider: bool, id: &str) -> String {
+        format!(
+            "{}:idx:{}:{id}",
+            self.prefix(),
+            if provider { "sid" } else { "token" }
+        )
+    }
+    fn claim_key(&self, key: &Key) -> String {
+        format!("{}:{}:claim:{}", self.prefix(), key.0, key.1)
     }
     async fn raw(&self, key: &str) -> Result<Option<String>> {
         self.retry
@@ -290,14 +314,14 @@ impl Redis {
     async fn raw_once(&self, key: &str) -> Result<Option<String>> {
         tokio::time::timeout(
             Duration::from_secs(5),
-            redis::cmd("GET")
-                .arg(key)
-                .query_async(&mut self.connection.clone()),
+            self.connection
+                .query(redis::cmd("GET").arg(key), &self.retry),
         )
         .await
         .map_err(|_| Error::new("redis_timeout"))?
         .map_err(|e: redis::RedisError| {
-            Error::new(if e.is_io_error() || e.is_timeout() {
+            vogon_redis::log_error("session_read", &e);
+            Error::new(if vogon_redis::transient(&e) {
                 "redis_unavailable"
             } else {
                 "redis_rejected"
@@ -315,11 +339,14 @@ impl Redis {
         }
         tokio::time::timeout(
             Duration::from_secs(5),
-            c.query_async(&mut self.connection.clone()),
+            self.connection.query(&c, &self.retry),
         )
         .await
         .map_err(|_| Error::new("redis_timeout"))?
-        .map_err(|_| Error::new("redis_unavailable"))
+        .map_err(|e| {
+            vogon_redis::log_error("session_script", &e);
+            Error::new("redis_unavailable")
+        })
     }
 }
 impl Store for Redis {
@@ -332,7 +359,7 @@ impl Store for Redis {
             let n = self
                 .script(
                     CREATE,
-                    vec![Self::key(&key), Self::index(false, &r.session_token)],
+                    vec![self.key(&key), self.index(false, &r.session_token)],
                     vec![
                         serde_json::to_string(&r).unwrap(),
                         format!("{}|{}", key.0, key.1),
@@ -349,7 +376,7 @@ impl Store for Redis {
     }
     fn get(&self, key: Key) -> Future<'_, Option<Record>> {
         boxed(async move {
-            self.raw(&Self::key(&key))
+            self.raw(&self.key(&key))
                 .await?
                 .map(|s| Record::decode(&s))
                 .transpose()
@@ -360,7 +387,7 @@ impl Store for Redis {
             if id.is_empty() {
                 return Ok(None);
             }
-            let Some(k) = self.raw(&Self::index(provider, &id)).await? else {
+            let Some(k) = self.raw(&self.index(provider, &id)).await? else {
                 return Ok(None);
             };
             let Some((t, c)) = k.split_once('|') else {
@@ -378,16 +405,16 @@ impl Store for Redis {
     fn change(&self, key: Key, change: Change) -> Future<'_, bool> {
         boxed(async move {
             for _ in 0..32 {
-                let Some(old) = self.raw(&Self::key(&key)).await? else {
+                let Some(old) = self.raw(&self.key(&key)).await? else {
                     return Ok(false);
                 };
                 let mut r = Record::decode(&old)?;
                 if !change.apply(&mut r)? {
                     return Ok(false);
                 };
-                let mut keys = vec![Self::key(&key), Self::index(false, &r.session_token)];
+                let mut keys = vec![self.key(&key), self.index(false, &r.session_token)];
                 if !r.provider_call_id.is_empty() {
-                    keys.push(Self::index(true, &r.provider_call_id));
+                    keys.push(self.index(true, &r.provider_call_id));
                 }
                 let n = self
                     .script(
@@ -414,7 +441,7 @@ impl Store for Redis {
     fn claim(&self, key: Key, owner: String) -> Future<'_, bool> {
         boxed(async move {
             for _ in 0..32 {
-                let Some(old) = self.raw(&Self::key(&key)).await? else {
+                let Some(old) = self.raw(&self.key(&key)).await? else {
                     return Ok(false);
                 };
                 let mut r = Record::decode(&old)?;
@@ -424,12 +451,12 @@ impl Store for Redis {
                 r.gateway_instance = owner.clone();
                 r.transition(State::Connected, utc_now());
                 let mut keys = vec![
-                    Self::key(&key),
-                    format!("gw:{}:claim:{}", key.0, key.1),
-                    Self::index(false, &r.session_token),
+                    self.key(&key),
+                    self.claim_key(&key),
+                    self.index(false, &r.session_token),
                 ];
                 if !r.provider_call_id.is_empty() {
-                    keys.push(Self::index(true, &r.provider_call_id));
+                    keys.push(self.index(true, &r.provider_call_id));
                 }
                 let n = self
                     .script(
@@ -453,12 +480,8 @@ impl Store for Redis {
     }
     fn release(&self, key: Key, owner: String) -> Future<'_, ()> {
         boxed(async move {
-            self.script(
-                RELEASE,
-                vec![format!("gw:{}:claim:{}", key.0, key.1)],
-                vec![owner],
-            )
-            .await?;
+            self.script(RELEASE, vec![self.claim_key(&key)], vec![owner])
+                .await?;
             Ok(())
         })
     }

@@ -153,9 +153,12 @@ Existing shared settings resolve through module 1. Host-specific defaults:
 | `GATEWAY_SHUTDOWN_TIMEOUT_SEC` | `210` | Per-driver graceful close budget; service allows another 15 seconds for final store/relay work. |
 
 These are bounds, not measured capacity recommendations. Redis mode requires an
-available standalone Redis and fails startup if unavailable; it never silently
-falls back to memory. Cluster mode is explicitly unsupported by these multi-key
-scripts. `Memory` is a single-process development store; lookup/pruning scans the
+available Redis and fails startup if unavailable; it never silently falls back
+to memory. `REDIS_CLUSTER_MODE=true` selects cluster routing and the dedicated
+`gw:{vogon-sessions-v1}:...` same-slot namespace for atomic session scripts. This
+limits session metadata writes to one shard; standalone mode keeps existing keys.
+Drain old calls before changing mode: active records are not imported. See
+[cluster operation and retry limits](../../OPERATIONS.md). `Memory` is a single-process development store; lookup/pruning scans the
 map and is not intended as a high-volume distributed backend.
 
 From the monorepo root, with the documented toolchain/native dependencies installed:
