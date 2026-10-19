@@ -1,0 +1,18 @@
+[package]
+name = "vogon-audio-runtime"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "Apache-2.0"
+repository = "https://github.com/LendEasy/vogon-rust"
+
+[dependencies]
+vogon-audio-core = { path = "../audio-core" }
+vogon-barge-in = { path = "../barge-in" }
+pyo3 = { version = "=0.30.1", features = ["auto-initialize"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[[bin]]
+name = "vogon-runtime-validation"
+path = "src/bin/validation.rs"
