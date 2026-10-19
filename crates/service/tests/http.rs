@@ -96,7 +96,7 @@ async fn authentication_validation_tenant_scope_duplicates_and_secret_redaction(
             .await
             .unwrap()
             .status(),
-        501
+        404
     );
     gateway.service.shutdown().await.unwrap();
 }

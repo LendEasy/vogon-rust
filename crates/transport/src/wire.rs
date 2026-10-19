@@ -28,8 +28,21 @@ pub enum Frame {
     Json(Value),
     Binary(Vec<u8>),
 }
+/// Optional call-local diagnostics. Implementations must be bounded, nonblocking and fail-open.
+pub trait Observer: Send + Sync + 'static {
+    /// Validated input envelopes before DSP; never exposed to another call.
+    fn input(&self, _now: f64, _message: &Value) {}
+    /// Scalar DSP diagnostics from one processed frame.
+    fn frame(&self, _now: f64, _detail: Value) {}
+    /// Transport/application callback on the same call clock.
+    fn event(&self, _now: f64, _event: &Value) {}
+}
 /// The host supplies its authenticated caller socket; completion means send completed.
 pub trait Sink: Send + 'static {
+    /// Expose this call's optional recorder/metrics tap to the transport.
+    fn observer(&self) -> Option<Arc<dyn Observer>> {
+        None
+    }
     /// Complete only after the underlying frame send succeeds or fails.
     /// Do not re-enter this session synchronously: the writer awaits this future
     /// before executing receipt side effects and accepting the next frame.

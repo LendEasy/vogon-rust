@@ -129,6 +129,10 @@ async fn phone_host_resolves_sid_feeds_initial_start_and_streams_media_both_dire
     cfg.stt_endpoint = stt.url.clone();
     cfg.tts_endpoint = tts.url.clone();
     cfg.settings["ambience_enabled"] = json!(false);
+    let recordings =
+        std::env::temp_dir().join(format!("vogon-phone-recording-{}", uuid::Uuid::new_v4()));
+    cfg.settings["recordings_path"] = json!(recordings);
+    cfg.settings["recording_enabled"] = json!(true);
     let gateway = Gateway::start(cfg).await;
     // Seed the post-dial record: the HTTP dial contract is independently tested locally.
     let record: Record = serde_json::from_value(json!({"tenant":"acme","call_id":"phone","session_token":"phone-token","mode":"twilio","app_base_url":turn.url})).unwrap();
@@ -215,6 +219,40 @@ async fn phone_host_resolves_sid_feeds_initial_start_and_streams_media_both_dire
             .state,
         State::Ended
     );
+    let wav = gateway
+        .service
+        .recordings
+        .get("acme", "phone", "recording.wav")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(&wav[..4], b"RIFF");
+    assert!(wav.len() > 44);
+    let events = gateway
+        .service
+        .recordings
+        .get("acme", "phone", "audio-events.json")
+        .await
+        .unwrap()
+        .unwrap();
+    let events: serde_json::Value = serde_json::from_slice(&events).unwrap();
+    assert!(
+        events["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["event"] == "tts_start")
+    );
+    assert!(
+        gateway
+            .service
+            .recordings
+            .get("acme", "phone", "frames.csv")
+            .await
+            .unwrap()
+            .is_some()
+    );
+    tokio::fs::remove_dir_all(recordings).await.unwrap();
     stt.task.await.unwrap();
     tts.task.await.unwrap();
 }

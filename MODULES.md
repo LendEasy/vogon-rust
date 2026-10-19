@@ -3,7 +3,7 @@
 This is the working checklist for the migration. Checked items describe implemented
 work; unchecked items describe remaining implementation or acceptance work.
 Modules 1–10 have implemented cores, but are not all production-complete.
-Module 11 is implemented and locally tested; modules 12–13 are in progress.
+Modules 11–12 are implemented and locally tested; module 13 is in progress.
 
 Architecture and ownership: [implementation guide](ARCHITECTURE.md).
 API documentation: [documentation guide](DOCUMENTATION.md).
@@ -34,7 +34,7 @@ deployment or every behavior of the owning Python transport has been ported.
 | 9 | `orchestration`: call lifecycle | Core implemented: native Turn API, concurrent input/event collection, ordered response execution, eager/final invalidation, holds and finalization. Local eight-call/full-duplex and clock-isolation tests. | Real transfer/artifact hooks, durable fact acknowledgement, full observability and live-call acceptance. |
 | 10 | `service`: HTTP service/session management | Implemented host: HTTP/WebSocket routes, auth, admission, dotenv/profile bootstrap, native Twilio REST/signatures and atomic memory/Redis records. Local browser/text/phone integration tests. | Transfers/artifact hooks, long-call lease renewal/crash recovery, dial reconciliation and production acceptance. |
 | 11 | Transfers/escalation | Implemented: native REST, 80 XML comparisons, callback races and real Redis CAS. | Real telephone acceptance, crash recovery and durable report outbox. |
-| 12 | Recording/artifacts | Pending. | Recording clocks, cleared-audio removal, WAV/event timelines and local/S3 upload. |
+| 12 | Recording/artifacts | Implemented: 162 exact WAV/timestamp/event comparisons; actual-send capture, local storage and AWS SDK S3. | Browser recording, crash recovery, retention and real S3 acceptance. |
 | 13 | Observability/deployment | Pending. | Operational metrics/logs, native capability checks, readiness, packaging and production shutdown/load acceptance. |
 
 Only implemented modules have crates. Future names are boundaries to implement,
@@ -344,7 +344,8 @@ timeout and duplicate tests; controlled telephone acceptance before production u
 
 ## 12. Recording and artifacts
 
-**Status:** Pending.
+**Status:** Implemented for the existing Twilio recorder; local/S3 protocol tests pass.
+**Location:** [`crates/artifacts`](crates/artifacts/README.md).
 **Responsibility:** Preserve accurate caller/agent audio and event timelines,
 including what happened to buffered audio when playback was cleared.
 **Python references:** [recorder](../voice-gateway/vogon/gateway/audio/audio_recorder.py),
@@ -352,12 +353,12 @@ including what happened to buffered audio when playback was cleared.
 [artifact store](../voice-gateway/vogon/gateway/audio/artifact_store.py),
 [audio event log](../voice-gateway/vogon/gateway/transport/audio_event_log.py).
 
-- [ ] Port recording clocks, channel policy and timestamped inbound/outbound capture.
-- [ ] Integrate actual-send, mark and clear hooks; preserve Python's treatment of
+- [x] Port recording clocks, channel policy and timestamped inbound/outbound capture.
+- [x] Integrate actual-send, mark and clear hooks; preserve Python's treatment of
   cleared/unheard output instead of recording all generated TTS as played.
-- [ ] Generate WAV and event artifacts with the existing metadata and naming conventions.
-- [ ] Port local/S3 persistence, upload errors and finalization/cleanup behavior.
-- [ ] Attach recorder lifecycle to call creation and module 9 finalization.
+- [x] Generate WAV and event artifacts with the existing metadata and naming conventions.
+- [x] Port local/S3 persistence, upload errors and finalization/cleanup behavior.
+- [x] Attach recorder lifecycle to call creation and module 9 finalization.
 
 **Dependencies:** Modules 1–3, 5, 7, 9 and 10.
 **Completion gate:** Compare WAV samples/lengths and event timelines with Python

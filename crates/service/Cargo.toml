@@ -30,6 +30,8 @@ vogon-transport = { path = "../transport" }
 vogon-front = { path = "../front" }
 vogon-orchestration = { path = "../orchestration" }
 
+vogon-artifacts = { path = "../artifacts" }
+
 vogon-escalation = { path = "../escalation" }
 
 [dev-dependencies]

@@ -387,14 +387,19 @@ async fn ws_twilio(
         .max_frame_size(s.config.max_message_bytes)
         .on_upgrade(move |socket| s.websocket(socket, lease, None)))
 }
-/// Reserve authenticated artifact paths for module 12 without pretending data exists.
+/// Authenticated tenant-scoped artifact retrieval, with S3 fallback and native timeline rendering.
 async fn artifact(
     AppState(s): AppState<Arc<Service>>,
     Path((tenant, id, name)): Path<(String, String, String)>,
     h: HeaderMap,
 ) -> HttpResult<Response> {
     authorize(&s, &h)?;
-    if s.store.get((tenant, id)).await.map_err(storage)?.is_none() {
+    if s.store
+        .get((tenant.clone(), id.clone()))
+        .await
+        .map_err(storage)?
+        .is_none()
+    {
         return Err(Failure(StatusCode::NOT_FOUND, "not found"));
     }
     if !matches!(
@@ -403,10 +408,60 @@ async fn artifact(
     ) {
         return Err(Failure(StatusCode::NOT_FOUND, "not found"));
     }
-    Err(Failure(
-        StatusCode::NOT_IMPLEMENTED,
-        "artifact module not installed",
-    ))
+    let failure = |_| {
+        Failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "artifact store unavailable",
+        )
+    };
+    let (bytes, content_type) = if name == "audio-timeline" {
+        let wav = s
+            .recordings
+            .get(&tenant, &id, "recording.wav")
+            .await
+            .map_err(failure)?
+            .ok_or(Failure(StatusCode::NOT_FOUND, "not found"))?;
+        let events = s
+            .recordings
+            .get(&tenant, &id, "audio-events.json")
+            .await
+            .map_err(failure)?
+            .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+            .unwrap_or(json!({"meta":{},"events":[]}));
+        let frames = s
+            .recordings
+            .get(&tenant, &id, "frames.csv")
+            .await
+            .map_err(failure)?;
+        let html = tokio::task::spawn_blocking(move || {
+            vogon_artifacts::timeline::render(&id, &wav, &events, frames.as_deref())
+        })
+        .await
+        .map_err(|_| Failure(StatusCode::INTERNAL_SERVER_ERROR, "timeline failed"))?;
+        (html.into_bytes(), "text/html; charset=utf-8")
+    } else {
+        let bytes = s
+            .recordings
+            .get(&tenant, &id, &name)
+            .await
+            .map_err(failure)?
+            .ok_or(Failure(StatusCode::NOT_FOUND, "not found"))?;
+        let kind = match name.as_str() {
+            "recording.wav" => "audio/wav",
+            "frames.csv" => "text/csv",
+            _ => "application/json",
+        };
+        (bytes, kind)
+    };
+    Ok((
+        [
+            ("content-type", content_type),
+            ("cache-control", "private, no-store"),
+            ("x-content-type-options", "nosniff"),
+        ],
+        bytes,
+    )
+        .into_response())
 }
 /// Signed transfer callbacks; audio uses a short-lived unguessable capability token.
 async fn escalation(

@@ -37,6 +37,7 @@ pub struct Service {
     pub artifact: Option<vogon_front::config::Artifact>,
     pub hooks: Arc<dyn Hooks>,
     pub transfers: Arc<vogon_escalation::Manager>,
+    pub recordings: Arc<vogon_artifacts::store::Stores>,
     pub(crate) calls: Arc<Semaphore>,
     pub(crate) handshakes: Arc<Semaphore>,
     registry: Mutex<HashSet<String>>,
@@ -98,7 +99,16 @@ impl Service {
             transfer_store,
         )
         .map_err(|e| Error::new(e.0))?;
+        let recordings = vogon_artifacts::store::Stores::new(
+            std::path::PathBuf::from(
+                config.settings["recordings_path"]
+                    .as_str()
+                    .unwrap_or("storage/recordings"),
+            ),
+            config.s3.clone(),
+        );
         Ok(Arc::new(Self {
+            recordings,
             calls: Arc::new(Semaphore::new(config.max_active)),
             handshakes: Arc::new(Semaphore::new(config.max_handshakes)),
             config,
@@ -342,6 +352,14 @@ impl Service {
             0.0,
         )?)?);
         let (outbound, mut inbound) = socket.split();
+        let clock = Clock::default();
+        let capture = crate::recording::Capture::new(
+            self.recordings.clone(),
+            record.tenant.clone(),
+            record.call_id.clone(),
+            clock.clone(),
+            mode == Mode::Twilio,
+        );
         let factory = SessionFactory {
             settings: self.config.settings.clone(),
             profile: profile.clone(),
@@ -351,7 +369,10 @@ impl Service {
             artifact: self.artifact.clone(),
             lender: String::new(),
             seed: 1,
-            sink: tokio::sync::Mutex::new(Some(Box::new(SocketSink(outbound)))),
+            sink: tokio::sync::Mutex::new(Some(Box::new(crate::recording::RecordingSink {
+                next: Box::new(SocketSink(outbound)),
+                capture: capture.clone(),
+            }))),
             initial_frame: initial,
             stt_endpoint: self.config.stt_endpoint.clone(),
             tts_endpoint: self.config.tts_endpoint.clone(),
@@ -372,6 +393,7 @@ impl Service {
             .map_err(|_| Error::new("invalid_front_settings"))?)
             .into();
         let hooks = Arc::new(SnapshotHooks {
+            capture: capture.clone(),
             store: self.store.clone(),
             key: (record.tenant.clone(), record.call_id.clone()),
             profile,
@@ -395,7 +417,7 @@ impl Service {
                 api,
                 factory: Arc::new(factory),
                 hooks,
-                clock: Clock::default(),
+                clock,
             }
             .run(inputs),
         ));
@@ -480,6 +502,7 @@ impl Sink for SocketSink {
 }
 /// Persist the exact tenant/call snapshot before opening transport; forward later hooks.
 struct SnapshotHooks {
+    capture: Arc<crate::recording::Capture>,
     store: SharedStore,
     key: (String, String),
     profile: Value,
@@ -490,6 +513,8 @@ impl Hooks for SnapshotHooks {
         boxed(async move {
             let snapshot = vogon_configuration::resolve_call_snapshot(&self.profile, &json!(call))
                 .map_err(|_| Error::new("invalid_call_snapshot"))?;
+            self.capture
+                .configure(snapshot["recording_enabled"].as_bool().unwrap_or(true));
             if !self
                 .store
                 .change(self.key.clone(), Change::Snapshot(snapshot))
@@ -507,6 +532,12 @@ impl Hooks for SnapshotHooks {
         self.next.escalate(order)
     }
     fn finish(&self, id: String, reason: String) -> Future<'_, ()> {
-        self.next.finish(id, reason)
+        boxed(async move {
+            let next = self.next.finish(id, reason.clone()).await;
+            for code in self.capture.finish(&reason).await {
+                eprintln!("{}", json!({"event":"artifact_failed","code":code}));
+            }
+            next
+        })
     }
 }

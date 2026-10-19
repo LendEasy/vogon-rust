@@ -247,6 +247,7 @@ struct Inner {
     response_lock: Mutex<()>,
     dispatch_lock: Mutex<()>,
     events: mpsc::UnboundedSender<Value>,
+    observer: Option<Arc<dyn wire::Observer>>,
     decisions: mpsc::UnboundedSender<DecisionCompletion>,
     decision_tasks: Mutex<tokio::task::JoinSet<()>>,
 }
@@ -397,6 +398,7 @@ impl Session {
                 .await?,
             );
         }
+        let observer = sink.observer();
         let (writer, writer_task) =
             Writer::start(sink, audio.clone(), state.clone(), clock.clone());
         let (events, rx) = mpsc::unbounded_channel();
@@ -417,6 +419,7 @@ impl Session {
             response_lock: Mutex::new(()),
             dispatch_lock: Mutex::new(()),
             events,
+            observer,
             decisions,
             decision_tasks: Mutex::new(tokio::task::JoinSet::new()),
         });
@@ -535,6 +538,9 @@ impl Session {
     pub async fn text(&self, message: Value) -> Result<bool> {
         let inner = &self.inner;
         let mode = inner.config.mode;
+        if let Some(observer) = &inner.observer {
+            observer.input(inner.clock.now(), &message);
+        }
         if mode == Mode::Twilio {
             match message["event"].as_str() {
                 Some("start") => {
@@ -623,6 +629,9 @@ impl Session {
                     active_audio: active,
                 })
                 .await?;
+            if let Some(observer) = &inner.observer {
+                observer.frame(now, json!({"raw_rms":value["raw_rms"],"clean_rms":value["clean_rms"],"threshold":value["threshold"],"streak":value["verdict"]["streak"],"tts_playing":u8::from(playing),"gap_active":u8::from(active&&!playing)}));
+            }
             // Python's open feed reaches STT before any barge-in side effects.
             // The no-AEC overlap fallback suppresses both STT and floor frames.
             if value["stt"].is_null() {
@@ -890,6 +899,14 @@ impl Inner {
         Ok(())
     }
 
+    /// Publish diagnostics through the call-local tap without changing event sequencing.
+    fn observe(&self, now: f64, name: &str, mut detail: Value) {
+        if let Some(observer) = &self.observer {
+            detail["kind"] = json!(name);
+            observer.event(now, &detail);
+        }
+    }
+
     /// Drain pure-state effects in order, never holding state across I/O.
     async fn dispatch(&self) -> Result<()> {
         let _guard = self.dispatch_lock.lock().await;
@@ -904,6 +921,9 @@ impl Inner {
             };
             if actions.is_empty() {
                 for event in events {
+                    if let Some(observer) = &self.observer {
+                        observer.event(self.clock.now(), &event);
+                    }
                     let _ = self.events.send(event);
                 }
                 break;
@@ -963,6 +983,9 @@ impl Inner {
                         }
                     }
                     Action::Floor(effect) => {
+                        if let Effect::Log { now, event, detail } = &effect {
+                            self.observe(*now, event, detail.clone());
+                        }
                         let _ = self
                             .events
                             .send(json!({"kind":"floor_effect","effect":effect}));
@@ -971,6 +994,9 @@ impl Inner {
             }
             // Publish caller callbacks after their clear/browser wire effects.
             for event in events {
+                if let Some(observer) = &self.observer {
+                    observer.event(self.clock.now(), &event);
+                }
                 let _ = self.events.send(event);
             }
         }

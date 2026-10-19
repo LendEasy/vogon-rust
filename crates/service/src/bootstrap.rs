@@ -21,6 +21,8 @@ pub struct Config {
     pub stt_endpoint: String,
     pub tts_endpoint: String,
     pub twilio_endpoint: String,
+    /// Native S3 settings; optional credentials may come from the same dotenv.
+    pub s3: Option<vogon_artifacts::store::S3Config>,
 }
 impl Config {
     /// Load a shared dotenv file. Explicit process values override file values.
@@ -76,7 +78,29 @@ impl Config {
                 .filter(|n| *n > 0)
                 .ok_or_else(|| Error::new("invalid_host_limit"))
         };
+        let s3 = if settings["s3_enabled"] == true {
+            let mut s3 = vogon_artifacts::store::S3Config::new(
+                settings["s3_bucket"].as_str().unwrap_or("").into(),
+                get("AWS_REGION", &get("AWS_DEFAULT_REGION", "us-east-1")),
+            );
+            if s3.bucket.is_empty() {
+                return Err(Error::new("s3_bucket_required"));
+            }
+            let key = get("AWS_ACCESS_KEY_ID", "");
+            let secret = get("AWS_SECRET_ACCESS_KEY", "");
+            if key.is_empty() != secret.is_empty() {
+                return Err(Error::new("incomplete_aws_credentials"));
+            }
+            if !key.is_empty() {
+                let token = get("AWS_SESSION_TOKEN", "");
+                s3.credentials = Some((key, secret, (!token.is_empty()).then_some(token)));
+            }
+            Some(s3)
+        } else {
+            None
+        };
         Ok(Self {
+            s3,
             settings,
             gateway,
             profiles,

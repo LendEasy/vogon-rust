@@ -4,7 +4,7 @@ Rust implementation of [Vogon](https://github.com/LendEasy/vogon), LendEasy's
 full-duplex voice gateway. Streaming speech, barge-in, speculative end-of-turn,
 playback and call-local timers run behind an application-facing Turn API.
 
-**Experimental migration:** modules 1–11 have implemented cores. Recording and production acceptance remain incomplete. Read
+**Experimental migration:** modules 1–12 have implemented cores. Production acceptance remains incomplete. Read
 [known issues](KNOWN_ISSUES.md) and the [module checklist](MODULES.md) before deployment.
 
 ## What is implemented
@@ -16,6 +16,7 @@ playback and call-local timers run behind an application-facing Turn API.
 - Native SpeexDSP/WebRTC VAD, ambience mixing and retained NumPy/audioop via PyO3.
 - Turn API clients, front/floor policy, configuration and memory/Redis session stores.
 - Native warm transfers, persona whispers, keypad bridging and atomic callbacks.
+- Call-local phone recording, playback timelines, atomic local files and AWS SDK S3.
 
 Application business logic stays in your Turn service. The
 [echo example](examples/echo-turn-service/README.md) replies with what the caller said.

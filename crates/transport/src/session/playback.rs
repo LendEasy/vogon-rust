@@ -88,6 +88,11 @@ impl Inner {
             if phone && sid.is_empty() {
                 return Err(Error::new("stream_not_started"));
             }
+            self.observe(
+                self.clock.now(),
+                "tts_start",
+                json!({"audio_id":response.audio_id,"text":response.text}),
+            );
             state.begin(
                 response.audio_id.clone(),
                 response.text.clone(),
@@ -338,6 +343,7 @@ impl Inner {
                 .await;
         }
         self.dispatch().await?;
+        self.observe(self.clock.now(),"tts_end",json!({"audio_id":response.audio_id,"cancelled":report.status!="complete","first_chunk_ms":report.first_chunk_ms,"chunks_sent":report.chunks_sent}));
         cleanup.armed = false;
         Ok(Some(report))
     }

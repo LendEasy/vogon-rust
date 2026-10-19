@@ -80,7 +80,7 @@ impl Gateway {
 }
 pub fn config() -> Config {
     Config::resolve(
-        &json!({"FRONT_MODEL_ENABLED":"false","DEEPGRAM_API_KEY":"local-test"}),
+        &json!({"FRONT_MODEL_ENABLED":"false","DEEPGRAM_API_KEY":"local-test","RECORDING_ENABLED":"false"}),
         &json!({}),
     )
     .unwrap()
