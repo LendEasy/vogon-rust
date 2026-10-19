@@ -3,7 +3,7 @@
 This is the working checklist for the migration. Checked items describe implemented
 work; unchecked items describe remaining implementation or acceptance work.
 Modules 1–10 have implemented cores, but are not all production-complete.
-Modules 11–13 remain pending. The next implementation module is **11**.
+Module 11 is implemented and locally tested; modules 12–13 are in progress.
 
 Architecture and ownership: [implementation guide](ARCHITECTURE.md).
 API documentation: [documentation guide](DOCUMENTATION.md).
@@ -13,7 +13,7 @@ Transfers, recording and production readiness remain incomplete.
 Generated-audio calls now exercise this host with live Deepgram STT/TTS and a
 local echo Turn service: [acceptance report](validation/live/REPORT.md).
 This includes browser PCM and locally simulated Twilio media, not PSTN calls.
-Modules 11–13 remain deferred while live acceptance gaps are evaluated.
+Earlier live acceptance gaps remain deferred while modules 11–13 are implemented.
 An offline parity gate means the listed behavior matches the current Python
 implementation on the saved corpus. Text operations use Rust standard Unicode
 whitespace; the accepted differences for U+001C–U+001F are recorded separately
@@ -33,7 +33,7 @@ deployment or every behavior of the owning Python transport has been ported.
 | 8 | `front`: front responses and line detection | Implemented and wired to transport and orchestration: selection/guards, Jev/Cerebras clients, source/canned holds and line detector. 7,048 direct comparisons, 6,000 state snapshots; original combined native gate: 73 pass. | External provider and full-call acceptance remain; exact-word echo limitation is preserved. |
 | 9 | `orchestration`: call lifecycle | Core implemented: native Turn API, concurrent input/event collection, ordered response execution, eager/final invalidation, holds and finalization. Local eight-call/full-duplex and clock-isolation tests. | Real transfer/artifact hooks, durable fact acknowledgement, full observability and live-call acceptance. |
 | 10 | `service`: HTTP service/session management | Implemented host: HTTP/WebSocket routes, auth, admission, dotenv/profile bootstrap, native Twilio REST/signatures and atomic memory/Redis records. Local browser/text/phone integration tests. | Transfers/artifact hooks, long-call lease renewal/crash recovery, dial reconciliation and production acceptance. |
-| 11 | Transfers/escalation | Pending. | Dial/whisper/keypad lifecycle, atomic callback handling and outcome reporting. |
+| 11 | Transfers/escalation | Implemented: native REST, 80 XML comparisons, callback races and real Redis CAS. | Real telephone acceptance, crash recovery and durable report outbox. |
 | 12 | Recording/artifacts | Pending. | Recording clocks, cleared-audio removal, WAV/event timelines and local/S3 upload. |
 | 13 | Observability/deployment | Pending. | Operational metrics/logs, native capability checks, readiness, packaging and production shutdown/load acceptance. |
 
@@ -326,16 +326,17 @@ not assertions of exact equivalence to Python's race behavior.
 
 ## 11. Transfers and escalation
 
-**Status:** Pending.
+**Status:** Implemented with local provider mocks; telephone acceptance remains.
+**Location:** [`crates/escalation`](crates/escalation/README.md).
 **Responsibility:** Execute transfer requests and reconcile asynchronous provider
 callbacks into one consistent escalation outcome.
 **Python reference:** [escalation package](../voice-gateway/vogon/gateway_service/escalation).
 
-- [ ] Port dial/hold/whisper/keypad flows and generated TwiML/voice responses.
-- [ ] Implement transfer and per-leg state, timeouts, fallback destinations and cleanup.
-- [ ] Port callback handling with atomic transitions and duplicate/out-of-order protection.
-- [ ] Report in-call outcomes and post-call transfer facts through existing contracts.
-- [ ] Connect escalation to module 9 decisions and module 10 routes/session records.
+- [x] Port dial/hold/whisper/keypad flows and generated TwiML/voice responses.
+- [x] Implement transfer and per-leg state, timeouts, fallback destinations and cleanup.
+- [x] Port callback handling with atomic transitions and duplicate/out-of-order protection.
+- [x] Report in-call outcomes and post-call transfer facts through existing contracts.
+- [x] Connect escalation to module 9 decisions and module 10 routes/session records.
 
 **Dependencies:** Modules 1, 9 and 10.
 **Completion gate:** Python parity for state/TwiML/outcome behavior; callback race,

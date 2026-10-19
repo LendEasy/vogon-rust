@@ -1689,6 +1689,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "vogon-escalation"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "redis",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+ "vogon-contracts",
+]
+
+[[package]]
 name = "vogon-front"
 version = "0.1.0"
 dependencies = [
@@ -1769,6 +1784,7 @@ dependencies = [
  "vogon-clocks",
  "vogon-configuration",
  "vogon-contracts",
+ "vogon-escalation",
  "vogon-front",
  "vogon-orchestration",
  "vogon-speech-providers",

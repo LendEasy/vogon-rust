@@ -15,7 +15,7 @@ fn record(tenant: &str, id: &str, token: &str) -> Record {
     )
     .unwrap()
 }
-struct Server(Child);
+struct Server(Child, String);
 impl Drop for Server {
     fn drop(&mut self) {
         let _ = self.0.kill();
@@ -52,8 +52,8 @@ async fn backend(redis: bool, ttl: Ttl) -> (SharedStore, Option<Server>) {
         .stderr(Stdio::null())
         .spawn()
         .expect("build tools/redis-stable or provide Redis test binary");
-    let server = Server(child);
     let url = format!("redis://127.0.0.1:{port}");
+    let server = Server(child, url.clone());
     for _ in 0..100 {
         if tokio::net::TcpStream::connect(("127.0.0.1", port))
             .await
@@ -336,4 +336,35 @@ fn all_49_lifecycle_transitions_have_explicit_acceptance_and_stable_timestamps()
             assert_eq!((r.connected_at_utc, r.ended_at_utc), (7., 8.));
         }
     }
+}
+
+/// Two independent clients contend on an opaque transfer value in a real Redis.
+#[tokio::test]
+async fn transfer_redis_cas_is_atomic_across_clients() {
+    let (_sessions, server) = backend(true, Ttl::default()).await;
+    let url = &server.as_ref().unwrap().1;
+    let a = vogon_escalation::Store::redis(url).unwrap();
+    let b = vogon_escalation::Store::redis(url).unwrap();
+    let ttl = Duration::from_millis(200);
+    assert!(
+        a.cas("gw:rust:esc:test", None, Some(b"old"), ttl)
+            .await
+            .unwrap()
+    );
+    let (x, y) = tokio::join!(
+        a.cas("gw:rust:esc:test", Some(b"old"), Some(b"a"), ttl),
+        b.cas("gw:rust:esc:test", Some(b"old"), Some(b"b"), ttl)
+    );
+    assert_ne!(x.unwrap(), y.unwrap());
+    assert_eq!(
+        a.get("gw:rust:esc:test").await.unwrap(),
+        b.get("gw:rust:esc:test").await.unwrap()
+    );
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    assert!(a.get("gw:rust:esc:test").await.unwrap().is_none());
+    assert!(
+        !b.cas("gw:rust:esc:test", Some(b"a"), Some(b"resurrect"), ttl)
+            .await
+            .unwrap()
+    );
 }

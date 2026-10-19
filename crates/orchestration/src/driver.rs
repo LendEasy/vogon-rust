@@ -477,6 +477,9 @@ impl Context {
         for event in response.client_events {
             self.client(&event.r#type, event.payload).await?;
         }
+        if let Some(order) = &response.escalation {
+            self.hooks.prepare_escalation(order.clone()).await?;
+        }
         for command in response.speak {
             if !held && (!self.authorize(revision).await || self.outdated(revision)) {
                 self.truncated(&command);

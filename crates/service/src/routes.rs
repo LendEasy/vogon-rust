@@ -331,6 +331,12 @@ async fn status(
     else {
         return Ok(Json(json!({"ok":false})));
     };
+    if twilio::state(get("CallStatus")).is_some_and(|state| state.terminal()) {
+        s.transfers
+            .caller_gone(get("CallSid"))
+            .await
+            .map_err(|_| Failure(StatusCode::SERVICE_UNAVAILABLE, "transfer callback failed"))?;
+    }
     if let Some(state) = twilio::state(get("CallStatus"))
         && s.store
             .change(
@@ -402,19 +408,66 @@ async fn artifact(
         "artifact module not installed",
     ))
 }
-/// Reserve signed escalation callbacks for module 11; no transfer is executed here.
+/// Signed transfer callbacks; audio uses a short-lived unguessable capability token.
 async fn escalation(
     AppState(s): AppState<Arc<Service>>,
+    Path(rest): Path<String>,
     h: HeaderMap,
     uri: Uri,
     body: String,
 ) -> HttpResult<Response> {
+    let Some((kind, id)) = rest.split_once('/') else {
+        return Err(Failure(StatusCode::NOT_FOUND, "not found"));
+    };
+    if kind == "audio" {
+        let token = id.strip_suffix(".mp3").unwrap_or("");
+        let data = s
+            .transfers
+            .audio(token)
+            .await
+            .map_err(|_| {
+                Failure(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "transfer store unavailable",
+                )
+            })?
+            .ok_or(Failure(StatusCode::NOT_FOUND, "not found"))?;
+        return Ok((
+            [
+                ("content-type", "audio/mpeg"),
+                ("cache-control", "private, no-store"),
+            ],
+            data,
+        )
+            .into_response());
+    }
     let form = url::form_urlencoded::parse(body.as_bytes())
         .into_owned()
         .collect::<Vec<_>>();
     verify(&s, &h, &uri, &form)?;
-    Err(Failure(
-        StatusCode::NOT_IMPLEMENTED,
-        "escalation module not installed",
-    ))
+    let query = url::form_urlencoded::parse(uri.query().unwrap_or("").as_bytes())
+        .into_owned()
+        .collect::<Vec<_>>();
+    let get = |name: &str| {
+        form.iter()
+            .chain(query.iter())
+            .rev()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| v.as_str())
+            .unwrap_or("")
+    };
+    let attempt = get("attempt")
+        .parse::<usize>()
+        .map_err(|_| Failure(StatusCode::UNPROCESSABLE_ENTITY, "attempt required"))?;
+    let leg = get("CallSid");
+    let failure = |_: vogon_escalation::Error| {
+        Failure(StatusCode::SERVICE_UNAVAILABLE, "transfer callback failed")
+    };
+    let xml=match kind {
+        "whisper"=>s.transfers.whisper(id,leg,attempt).await.map_err(failure)?,
+        "agent-keypress"=>s.transfers.keypress(id,leg,attempt,get("Digits")).await.map_err(failure)?,
+        "agent-status"=>return Ok(Json(json!({"status":if s.transfers.status(id,leg,attempt,get("CallStatus")).await.map_err(failure)?{"ok"}else{"ignored"}})).into_response()),
+        _=>return Err(Failure(StatusCode::NOT_FOUND,"not found")),
+    };
+    Ok(([("content-type", "application/xml")], xml).into_response())
 }

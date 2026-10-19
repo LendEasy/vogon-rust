@@ -36,6 +36,7 @@ pub struct Service {
     pub clients: vogon_front::bootstrap::Clients,
     pub artifact: Option<vogon_front::config::Artifact>,
     pub hooks: Arc<dyn Hooks>,
+    pub transfers: Arc<vogon_escalation::Manager>,
     pub(crate) calls: Arc<Semaphore>,
     pub(crate) handshakes: Arc<Semaphore>,
     registry: Mutex<HashSet<String>>,
@@ -65,6 +66,38 @@ impl Service {
             .map_err(|_| eprintln!("front_artifact_load_failed"))
             .ok()
         };
+        let transfer_store = if config.gateway["session_store"] == "redis" {
+            vogon_escalation::Store::redis(config.settings["redis_url"].as_str().unwrap_or(""))
+                .map_err(|e| Error::new(e.0))?
+        } else {
+            vogon_escalation::Store::default()
+        };
+        let setting = |name: &str| config.settings[name].as_str().unwrap_or("").to_owned();
+        let transfers = vogon_escalation::Manager::new(
+            vogon_escalation::Config {
+                endpoint: config.twilio_endpoint.clone(),
+                account: setting("twilio_account_sid"),
+                token: setting("twilio_auth_token"),
+                from: setting("twilio_phone_number"),
+                public_base: config.gateway["public_base_url"]
+                    .as_str()
+                    .unwrap_or("")
+                    .into(),
+                say_voice: config.gateway["escalation_say_voice"]
+                    .as_str()
+                    .unwrap_or(vogon_escalation::twiml::VOICE)
+                    .into(),
+                tts_endpoint: "https://api.deepgram.com/v1/speak".into(),
+                tts_key: setting("deepgram_api_key"),
+                timeout: Duration::from_secs(10),
+                retry_delays: [1, 2, 4, 8, 15, 30, 60]
+                    .into_iter()
+                    .map(Duration::from_secs)
+                    .collect(),
+            },
+            transfer_store,
+        )
+        .map_err(|e| Error::new(e.0))?;
         Ok(Arc::new(Self {
             calls: Arc::new(Semaphore::new(config.max_active)),
             handshakes: Arc::new(Semaphore::new(config.max_handshakes)),
@@ -74,6 +107,7 @@ impl Service {
             clients,
             artifact,
             hooks: Arc::new(NoHooks),
+            transfers,
             registry: Mutex::new(HashSet::new()),
             count: watch::channel(0).0,
             stopping: watch::channel(false).0,
@@ -121,7 +155,11 @@ impl Service {
             },
         )
         .await
-        .map_err(|_| Error::new("shutdown_timeout"))?
+        .map_err(|_| Error::new("shutdown_timeout"))??;
+        tokio::time::timeout(self.config.shutdown_timeout, self.transfers.drain())
+            .await
+            .map_err(|_| Error::new("transfer_drain_timeout"))?;
+        Ok(())
     }
     /// Number of owned upgraded/pending sockets; does not expose call identifiers.
     pub fn active(&self) -> usize {
@@ -337,7 +375,11 @@ impl Service {
             store: self.store.clone(),
             key: (record.tenant.clone(), record.call_id.clone()),
             profile,
-            next: self.hooks.clone(),
+            next: Arc::new(crate::extensions::CallHooks::new(
+                self.transfers.clone(),
+                record.clone(),
+                self.hooks.clone(),
+            )),
         });
         let (input, inputs) = mpsc::channel(self.config.input_capacity);
         // Own the driver even if the enclosing upgraded socket task is dropped.
@@ -457,6 +499,9 @@ impl Hooks for SnapshotHooks {
             }
             self.next.configure(call).await
         })
+    }
+    fn prepare_escalation(&self, order: EscalationOrder) -> Future<'_, ()> {
+        self.next.prepare_escalation(order)
     }
     fn escalate(&self, order: EscalationOrder) -> Future<'_, Value> {
         self.next.escalate(order)

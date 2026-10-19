@@ -73,6 +73,10 @@ pub trait Factory: Send + Sync + 'static {
 pub trait Hooks: Send + Sync + 'static {
     /// Apply recording policy before audio starts.
     fn configure(&self, config: CallConfig) -> Future<'_, ()>;
+    /// Prepare transfer audio while handoff speech plays; no redirect/dial may happen here.
+    fn prepare_escalation(&self, _: EscalationOrder) -> Future<'_, ()> {
+        boxed(async { Ok(()) })
+    }
     /// Perform an application-composed escalation order after its handoff speech.
     fn escalate(&self, order: EscalationOrder) -> Future<'_, Value>;
     /// Flush recording/observability artifacts after transport close.

@@ -124,7 +124,8 @@ Memory mode applies the same expiry policy, pruned on access.
 | `POST /v1/twilio/status` | Signed state transition and bounded best-effort app status relay. |
 | `GET /ws/call?token=...` | Text/browser upgrade and exclusive media attachment. |
 | `GET /ws/twilio` | Phone start-frame/SID lookup and exclusive attachment. |
-| Artifact paths / escalation callbacks | Auth/signature boundary is present; return **501** until modules 12/11 are installed. |
+| Escalation callbacks | Signed native transfer callbacks and expiring persona audio capabilities (module 11). |
+| Artifact paths | Return **501** until module 12 is installed. |
 
 As in Python, management authentication uses the application/gateway pair secret;
 tenant identity is data supplied by that trusted service. Empty/whitespace service
@@ -182,7 +183,7 @@ Deliberate differences from Python are exercised by the native tests:
   stops when shutdown begins. XML attributes are escaped.
 - Dial failures mark the record failed and return 502 rather than leaving it dialing.
 
-Transfer/artifact hooks are still `NoHooks`, so transfer success and recording are
+Transfer hooks are installed from module 11. Artifact hooks remain pending, so recording is
 not implemented. No long-call lease-renewal/recovery protocol exists: live claims
 expire after 24 hours, and process-crash recovery currently waits for expiry.
 Rolling Python/Rust ownership compatibility is not accepted; stop existing calls
