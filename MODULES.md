@@ -36,7 +36,7 @@ deployment or every behavior of the owning Python transport has been ported.
 | 10 | `service`: HTTP service/session management | Implemented host: HTTP/WebSocket routes, auth, admission, dotenv/profile bootstrap, native Twilio REST/signatures and atomic memory/Redis records. Local browser/text/phone integration tests. | Long-call lease renewal/crash recovery, dial reconciliation and production acceptance. |
 | 11 | Transfers/escalation | Implemented: native REST, 80 XML comparisons, callback races and real Redis CAS. | Real telephone acceptance, crash recovery and durable report outbox. |
 | 12 | Recording/artifacts | Implemented: 162 exact WAV/timestamp/event comparisons; actual-send capture, local storage and AWS SDK S3. | Browser recording, crash recovery, retention and real S3 acceptance. |
-| 13 | Observability/deployment | Implemented retries, fixed metrics, native probes, readiness, CI/deployment definitions; 207 native tests pass. | YAML dependency advisory; hosted CI/container verification; production shutdown/load and real-call acceptance. |
+| 13 | Observability/deployment | Implemented retries, fixed metrics, native probes, readiness, CI/deployment definitions; 213 native tests and local container smoke pass. | Hosted CI rerun; production shutdown/load and real-call acceptance. |
 
 Only implemented modules have crates. Future names are boundaries to implement,
 not empty placeholders counted as completed work. The application remains
@@ -386,8 +386,10 @@ Dockerfile and `.github/workflows`. See [operations](OPERATIONS.md) and the
   dependency policy, coverage and contract fuzzing with AddressSanitizer.
 - [x] Validate native shutdown/parallel admission and cancellation of transfer drain;
   document phase budgets and current resource limits.
-- [ ] Resolve unmaintained YAML dependency advisory without suppressing the gate.
-- [ ] Complete the Docker build/smoke test and verify workflows on hosted CI.
+- [x] Replace the unmaintained YAML backend without suppressing the advisory gate;
+  document and test leading-zero scalar migration behavior.
+- [x] Complete the pinned Docker build and non-root gateway/echo smoke tests.
+- [ ] Rerun repaired workflows on hosted CI after publication.
 - [ ] Bound provider buffering and concurrent recording finalization; establish
   production resource/admission limits with load and long-duration evidence.
 - [ ] Complete deployment smoke tests, real-call acceptance and a documented

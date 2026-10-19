@@ -197,10 +197,13 @@ docker run --rm --stop-timeout 450 -p 8002:8002 \
   --env-file /secure/vogon.env -v vogon-recordings:/data/recordings vogon-rust:review
 ```
 
-Local image acceptance is outstanding: the attempted build exhausted the host's
-root filesystem while extracting the builder image. A CI build/start/ready/SIGTERM
-workflow is added but has not yet run on GitHub. Native host tests passing does
-not establish container acceptance.
+Local image acceptance passed on 2026-10-19 after explicitly selecting both
+`vogon-gateway` and `vogon-echo-turn-service` binary targets in the Docker build.
+The gateway's actual interpreter/NumPy/audioop, SpeexDSP and VAD probes passed;
+readiness returned true and SIGTERM shutdown exited zero. The echo binary also
+started, served health and exited zero on SIGINT. Both ran as UID 10001. The
+previous root-disk failure was environmental; this build used Docker storage on
+the larger workspace disk. Hosted CI must still rerun after publishing the fixes.
 
 For rollout, retain the previous image and configuration, first close admission
 and drain old calls, validate the new image's native/store checks, then perform
@@ -219,6 +222,41 @@ advisories and unapproved licenses/sources. Scheduled/manual jobs produce LCOV
 coverage and run bounded contract fuzzing under AddressSanitizer. These jobs do
 not load deployment secrets, call GPT Live or make paid provider requests.
 
-The current dependency gate intentionally fails on the existing unmaintained
-`unsafe-libyaml` transitive dependency of `serde_yaml_ng`; there is no advisory
-ignore. Replace/review the YAML dependency in the deferred fixes before release.
+The front artifact loader uses `serde-saphyr` 2 with only deserialization enabled.
+`serde_yaml_ng` and its unmaintained `unsafe-libyaml` backend are removed from the
+workspace lockfile; `cargo deny check` passes without adding an advisory ignore.
+Includes, environment interpolation and custom tags are disabled. Explicit parser
+options preserve last-value-wins duplicate keys, ordinary (unexpanded) merge keys,
+YAML 1.2 boolean spellings and the prior JSON treatment of non-finite floats.
+
+The replacement resolves **unquoted leading-zero numerals**, such as `012`, as
+numbers; the old backend treated them as strings. Quote identifiers (`"012"`) to
+preserve their text, including in `prompt` or other string fields. The compatibility
+corpus records the old outputs and explicit migration expectations rather than
+silently excluding these cases. Normal public front configuration, multiline text,
+anchors, scalar types and malformed-input rejection are covered by file-loading
+tests. See [parser options](https://docs.rs/serde-saphyr/2.0.0/serde_saphyr/struct.Options.html).
+
+
+### CI repair verification (2026-10-19)
+
+The three failed workflows on `0ba5954` were traced to a Docker binary-selection
+error, output directories missing on a clean parity checkout, and the unmaintained
+YAML dependency. The Docker build now selects both copied binary targets. Module
+and transport parity entry points create their ignored results directories before
+writing, including direct invocation of the transport parity script.
+
+Local verification passed:
+
+- 213 native workspace tests; the YAML file-loader corpus covers 29 cases with
+  frozen old-backend outputs and two explicit leading-zero migration expectations.
+- The complete parity workflow from a fresh results-free workspace, using public
+  Python gateway `9874449e9f10c536d691301ec071873049d6bc62` and contract
+  `eb312e02b38ee932893bf825b441967302a65c9c`: modules, audio/native AEC/VAD,
+  providers/transport/clocks, front, 80 transfer XML comparisons and 162 exact
+  recording/artifact comparisons. The local reference interpreter was Python 3.10;
+  hosted parity uses Python 3.12, so this does not substitute for its rerun.
+- `cargo deny check`: advisories, bans, licenses and sources all pass; ignore list
+  unchanged. Scoped formatting/Clippy and workspace Rustdoc links pass.
+- Full pinned Docker release build and non-root runtime smoke tests described above
+  (the image uses Python 3.11). No paid provider calls were made for these repairs.

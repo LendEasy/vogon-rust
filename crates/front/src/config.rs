@@ -21,8 +21,19 @@ impl Artifact {
     pub fn load(path: &Path, max_words: usize) -> Result<Self> {
         let text =
             std::fs::read_to_string(path).map_err(|_| Error::new("front_config_read_failed"))?;
-        let value: Value =
-            serde_yaml_ng::from_str(&text).map_err(|_| Error::new("invalid_front_yaml"))?;
+        // Preserve the former serde_yaml_ng -> JSON boundary: duplicate keys use
+        // the last value, merge keys stay ordinary data, and YAML 1.1 yes/no
+        // spellings remain strings. Only deserialization is compiled; includes,
+        // environment interpolation and custom tags are not enabled.
+        let options = serde_saphyr::options! {
+            duplicate_keys: serde_saphyr::DuplicateKeyPolicy::LastWins,
+            merge_keys: serde_saphyr::MergeKeyPolicy::AsOrdinary,
+            strict_booleans: true,
+            reject_unsupported_tags: true,
+            non_finite_float_policy: serde_saphyr::NonFiniteFloatPolicy::PassThrough,
+        };
+        let value: Value = serde_saphyr::from_str_with_options(&text, options)
+            .map_err(|_| Error::new("invalid_front_yaml"))?;
         Self::from_value(&value, max_words)
     }
     /// Validate artifact structure and lint phrases with the same structural guards as generated lines.

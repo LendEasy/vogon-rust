@@ -1,0 +1,351 @@
+[
+  {
+    "name": "empty",
+    "yaml": "",
+    "reference": {
+      "ok": null
+    }
+  },
+  {
+    "name": "null",
+    "yaml": "null",
+    "reference": {
+      "ok": null
+    }
+  },
+  {
+    "name": "public_example",
+    "yaml": "# A neutral front artifact — the template for FRONT_CONFIG_PATH.\n#\n# The gateway's filler hold draws its words from a file like this one while\n# your turn service composes a reply (docs/voice-gateway-front-model.md,\n# docs/FRONT_COMPLEMENT_DESIGN.md). The gateway ships no words of its own:\n# with FRONT_CONFIG_PATH unset the model tier is off and the hold uses the\n# FillerPolicy pools your service returns in CallConfig.\n#\n# Every pool is linted at load against the same guards the model's lines get\n# (vogon/gateway/transport/front_guard.py): a line must be safe at ANY moment\n# of the call, because the rules that choose it never read what the caller\n# said. A pool with \"Okay\", \"Got it\", \"Sure\", a number or a word from\n# must_not_say refuses to load.\n#\n# This template carries only the beat pools, so a gateway pointed at it says\n# at most a four-word acknowledgement while it waits. To let the model pick a\n# fuller line, add the tiers (lookup, courtesy, repeat), move_question,\n# move_criteria, move_riders and prompt that your domain's survey supports;\n# the design doc explains how those were derived.\n\nmust_not_say: []\n\nbeats:\n  # the hold is still open at FRONT_BEAT_AFTER_MS and the model had nothing\n  hold:\n    - \"One moment.\"\n    - \"Bear with me.\"\n    - \"Just a moment.\"\n  # the answer still not back FRONT_WAIT_AGAIN_AFTER_MS after a front line\n  wait:\n    - \"Still with you.\"\n    - \"Just a moment longer.\"\n",
+    "reference": {
+      "ok": {
+        "beats": {
+          "hold": [
+            "One moment.",
+            "Bear with me.",
+            "Just a moment."
+          ],
+          "wait": [
+            "Still with you.",
+            "Just a moment longer."
+          ]
+        },
+        "must_not_say": []
+      }
+    }
+  },
+  {
+    "name": "multiline",
+    "yaml": "prompt: |\n  Help the caller.\n  Stay concise.\nmove_question: >-\n  Which move\n  fits best?\n",
+    "reference": {
+      "ok": {
+        "move_question": "Which move fits best?",
+        "prompt": "Help the caller.\nStay concise.\n"
+      }
+    }
+  },
+  {
+    "name": "quotes_unicode",
+    "yaml": "prompt: \"こんにちは: café # quoted\"\nbeats: {hold: [\"One moment.\"]}\n",
+    "reference": {
+      "ok": {
+        "beats": {
+          "hold": [
+            "One moment."
+          ]
+        },
+        "prompt": "こんにちは: café # quoted"
+      }
+    }
+  },
+  {
+    "name": "anchors",
+    "yaml": "beats:\n  hold: &pool [\"One moment.\"]\n  wait: *pool\n",
+    "reference": {
+      "ok": {
+        "beats": {
+          "hold": [
+            "One moment."
+          ],
+          "wait": [
+            "One moment."
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "duplicates",
+    "yaml": "prompt: first\nprompt: last\nmove_criteria: {a: 1, a: 2}\n",
+    "reference": {
+      "ok": {
+        "move_criteria": {
+          "a": 2
+        },
+        "prompt": "last"
+      }
+    }
+  },
+  {
+    "name": "merge_key",
+    "yaml": "move_criteria:\n  base: &base {a: 1}\n  extended: {<<: *base, b: 2}\n",
+    "reference": {
+      "ok": {
+        "move_criteria": {
+          "base": {
+            "a": 1
+          },
+          "extended": {
+            "<<": {
+              "a": 1
+            },
+            "b": 2
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "booleans",
+    "yaml": "move_criteria: {a: true, b: True, c: TRUE, d: false, e: False, f: FALSE, yes: yes, no: no, on: on, off: off}\n",
+    "reference": {
+      "ok": {
+        "move_criteria": {
+          "a": true,
+          "b": true,
+          "c": true,
+          "d": false,
+          "e": false,
+          "f": false,
+          "no": "no",
+          "off": "off",
+          "on": "on",
+          "yes": "yes"
+        }
+      }
+    }
+  },
+  {
+    "name": "numbers",
+    "yaml": "move_criteria: {decimal: 42, leading: 012, hex: 0x10, octal: 0o12, float: 1.5, exponent: 1e3, quoted: \"42\"}\n",
+    "reference": {
+      "ok": {
+        "move_criteria": {
+          "decimal": 42,
+          "exponent": 1000.0,
+          "float": 1.5,
+          "hex": 16,
+          "leading": "012",
+          "octal": 10,
+          "quoted": "42"
+        }
+      }
+    },
+    "migration_note": "Unquoted leading-zero numerals now resolve as numbers; quote identifier strings to preserve their spelling.",
+    "expected": {
+      "ok": {
+        "move_criteria": {
+          "decimal": 42,
+          "exponent": 1000.0,
+          "float": 1.5,
+          "hex": 16,
+          "leading": 12.0,
+          "octal": 10,
+          "quoted": "42"
+        }
+      }
+    }
+  },
+  {
+    "name": "nonfinite",
+    "yaml": "move_criteria: {nan: .nan, inf: .inf, neg: -.inf}\n",
+    "reference": {
+      "ok": {
+        "move_criteria": {
+          "inf": null,
+          "nan": null,
+          "neg": null
+        }
+      }
+    }
+  },
+  {
+    "name": "tags",
+    "yaml": "prompt: !!str hello\nmove_criteria: {integer: !!int 12, boolean: !!bool true}\n",
+    "reference": {
+      "ok": {
+        "move_criteria": {
+          "boolean": true,
+          "integer": 12
+        },
+        "prompt": "hello"
+      }
+    }
+  },
+  {
+    "name": "custom_tag",
+    "yaml": "prompt: !custom hello\n",
+    "reference": {
+      "error": true
+    }
+  },
+  {
+    "name": "numeric_keys",
+    "yaml": "move_criteria: {12: twelve, true: truth}\n",
+    "reference": {
+      "ok": {
+        "move_criteria": {
+          "12": "twelve",
+          "true": "truth"
+        }
+      }
+    }
+  },
+  {
+    "name": "sequence_root",
+    "yaml": "[one, two]",
+    "reference": {
+      "ok": [
+        "one",
+        "two"
+      ]
+    }
+  },
+  {
+    "name": "scalar_root",
+    "yaml": "hello",
+    "reference": {
+      "ok": "hello"
+    }
+  },
+  {
+    "name": "unsafe_pool",
+    "yaml": "beats: {hold: [\"Pay $10.\"], wait: [\"One moment.\"]}\n",
+    "reference": {
+      "ok": {
+        "beats": {
+          "hold": [
+            "Pay $10."
+          ],
+          "wait": [
+            "One moment."
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "wrong_pool_type",
+    "yaml": "beats: {hold: [12]}",
+    "reference": {
+      "ok": {
+        "beats": {
+          "hold": [
+            12
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "malformed",
+    "yaml": "beats: [unterminated",
+    "reference": {
+      "error": true
+    }
+  },
+  {
+    "name": "multiple_documents",
+    "yaml": "prompt: first\n---\nprompt: second\n",
+    "reference": {
+      "error": true
+    }
+  },
+  {
+    "name": "unknown_alias",
+    "yaml": "prompt: *missing",
+    "reference": {
+      "error": true
+    }
+  },
+  {
+    "name": "recursive_alias",
+    "yaml": "move_criteria: &self {nested: *self}",
+    "reference": {
+      "error": true
+    }
+  },
+  {
+    "name": "comment_only",
+    "yaml": "# nothing here",
+    "reference": {
+      "ok": null
+    }
+  },
+  {
+    "name": "explicit_empty",
+    "yaml": "---\n...\n",
+    "reference": {
+      "ok": null
+    }
+  },
+  {
+    "name": "folded_and_escaped",
+    "yaml": "prompt: \"a\\nb\\t\\\"c\\\"\"\n",
+    "reference": {
+      "ok": {
+        "prompt": "a\nb\t\"c\""
+      }
+    }
+  },
+  {
+    "name": "nulls",
+    "yaml": "move_criteria: {a: ~, b: Null, c: NULL, d: null, e: \"null\"}\n",
+    "reference": {
+      "ok": {
+        "move_criteria": {
+          "a": null,
+          "b": null,
+          "c": null,
+          "d": null,
+          "e": "null"
+        }
+      }
+    }
+  },
+  {
+    "name": "string_merge",
+    "yaml": "move_criteria: {\"<<\": text, normal: value}\n",
+    "reference": {
+      "ok": {
+        "move_criteria": {
+          "<<": "text",
+          "normal": "value"
+        }
+      }
+    }
+  },
+  {
+    "name": "leading_zero_prompt",
+    "yaml": "prompt: 012\n",
+    "reference": {
+      "ok": {
+        "prompt": "012"
+      }
+    },
+    "migration_note": "Quote leading-zero identifiers in string fields; the new numeric value is rejected by the Artifact schema.",
+    "expected": {
+      "ok": {
+        "prompt": 12.0
+      }
+    }
+  },
+  {
+    "name": "quoted_leading_zero_prompt",
+    "yaml": "prompt: \"012\"\n",
+    "reference": {
+      "ok": {
+        "prompt": "012"
+      }
+    }
+  }
+]

@@ -22,6 +22,6 @@ provider tests must remain opt-in; ordinary CI must not make paid requests.
 
 The publication history imports existing modules in dependency order. It is an
 initial import of their tested state, not a reconstruction of development dates.
-Modules 11–13 are now implemented with local tests. The published acceptance gaps,
-dependency advisory and container/hosted CI validation remain open work; see
-[OPERATIONS.md](OPERATIONS.md).
+Modules 11–13 are now implemented with local tests. Dependency policy and local
+container smoke checks pass. Hosted CI reruns and the published production
+acceptance gaps remain open work; see [OPERATIONS.md](OPERATIONS.md).

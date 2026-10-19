@@ -253,6 +253,7 @@ def save(stage,h,binary):
     if hasattr(h,'barge_coverage'): report['coverage']=h.barge_coverage
     if hasattr(h,'native_tests'): report['native_tests']=h.native_tests
     report['source_sha256']={str(p.relative_to(MONO)):hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
+    (ROOT/'results').mkdir(parents=True, exist_ok=True)
     (ROOT/f'results/{stage}.json').write_text(json.dumps(report,indent=2,ensure_ascii=False)+'\n')
     print(f'{stage}: {len(h.rows)} parity cases passed',flush=True)
     if h.differences:

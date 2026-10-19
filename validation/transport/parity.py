@@ -122,5 +122,6 @@ def main():
             for j,(actual,expected) in enumerate(zip(a,e)):assert actual==expected,(i,j,actual,expected)
     finally:native.close()
     result=dict(passed=True,clock_traces=100,clock_snapshots=snapshots,browser_framing=100,browser_callback_traces=30,browser_callbacks=600,phone_callback_traces=30,phone_callbacks=600)
+    (ROOT/'results').mkdir(parents=True, exist_ok=True)
     (ROOT/'results/parity.json').write_text(json.dumps(result,indent=2)+'\n');print(result)
 if __name__=='__main__':main()

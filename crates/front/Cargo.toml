@@ -10,7 +10,7 @@ repository = "https://github.com/LendEasy/vogon-rust"
 vogon-resilience = { path = "../resilience" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip", "preserve_order"] }
-serde_yaml_ng = "0.10"
+serde-saphyr = { version = "2", default-features = false, features = ["deserialize"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "io-util", "test-util"] }

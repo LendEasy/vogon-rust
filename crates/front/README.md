@@ -107,3 +107,20 @@ production concurrency and the full application call loop are separate acceptanc
 work. No GPT Live or external provider tests were run for this module.
 
 Validation, cases and saved evidence: [module-8 tests](../../validation/front/README.md).
+
+
+### YAML backend migration
+
+Artifact loading uses `serde-saphyr` 2 with deserialization only. The old
+`serde_yaml_ng` / `unsafe-libyaml` dependency chain is removed. Explicit options
+retain last-value-wins duplicate keys, ordinary merge keys, YAML 1.2 boolean
+inference and JSON handling of non-finite values; custom tags remain rejected.
+Includes and environment interpolation are not enabled.
+
+Unquoted leading-zero numerals such as `012` now resolve as numbers rather than
+strings. Quote identifier text (`"012"`), especially in string fields such as
+`prompt`, where an unquoted numeric value will fail schema validation. The 29-case
+file-loader corpus in `tests/fixtures/yaml_compatibility.json` records legacy
+outputs and explicit migration expectations. Ordinary public front artifacts,
+anchors, multiline/Unicode strings, duplicate/merge keys and malformed documents
+are covered without retaining the old parser as a development dependency.

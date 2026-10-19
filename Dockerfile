@@ -10,7 +10,7 @@ COPY . .
 RUN /opt/venv/bin/python tools/fetch_webrtcvad.py
 ENV PYO3_PYTHON=/opt/venv/bin/python
 ENV PYTHONPATH=/opt/venv/lib/python3.11/site-packages
-RUN cargo build --locked --release -j 2 -p vogon-service --bin vogon-gateway -p vogon-echo-turn-service
+RUN cargo build --locked --release -j 2 -p vogon-service --bin vogon-gateway -p vogon-echo-turn-service --bin vogon-echo-turn-service
 
 FROM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587 AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \

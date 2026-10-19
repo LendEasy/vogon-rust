@@ -17,6 +17,7 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--sockets',action='store_true',help='Also run local WebSocket/native lifecycle tests; requires loopback permission')
     args=parser.parse_args()
+    (ROOT/'results').mkdir(parents=True, exist_ok=True)
     cargo=shutil.which('cargo') or '/tmp/vogon-rust-toolchain/cargo/bin/cargo'
     env=dict(os.environ, CARGO_HOME=os.environ.get('CARGO_HOME','/tmp/vogon-rust-toolchain/cargo'),RUSTUP_HOME=os.environ.get('RUSTUP_HOME','/tmp/vogon-rust-toolchain/rustup'),PYO3_PYTHON=sys.executable,RUSTFLAGS='-C target-cpu=native',PYTHONDONTWRITEBYTECODE='1',OPENBLAS_NUM_THREADS='1',OMP_NUM_THREADS='1')
     env['PYTHONPATH']=os.pathsep.join([sysconfig.get_path('purelib'),str(MONOREPO/'voice-gateway'),str(MONOREPO/'vogon-contract/src')])
