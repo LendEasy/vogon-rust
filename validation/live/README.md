@@ -6,6 +6,96 @@ local and ignored; the public [report](REPORT.md) summarizes earlier runs.
 For a standalone demo application use the
 [echo Turn service](../../examples/echo-turn-service/README.md).
 
+## Python ladder Turn service smoke
+
+`ladder_smoke.py` runs the real Python `app.turns.main` service in a separate
+process behind the Rust production router/Driver/Session. It reuses the existing
+`promise` script from `data-plane/tests/gateway_e2e/ladders_duplex_call.py` verbatim:
+identity, availability, DOB/ZIP verification, self-managed payment promise and
+closure. The fixture contains a fictional account. It makes live Deepgram and
+application reasoning calls, but places no telephone call and runs no GPT Live.
+
+```sh
+data-plane/.venv/bin/python vogon-rust/validation/live/ladder_smoke.py \
+  --live --env data-plane/.env \
+  --out vogon-rust/validation/live/results/python-ladder-UNIQUE_RUN
+```
+
+Build `service-live-host` first. The output directory must not already exist.
+The phone endpoint sends real-time 20 ms mu-law audio, receives actual streamed
+TTS, and acknowledges marks after simulated playout. The observation proxies
+forward real HTTP/provider responses unchanged. The Python launcher primes the
+existing demo configuration and captures successful checkpoint commits without
+replacing reasoning or checkpoint behavior. It seeds the normal application call
+record before the call. SQLite, storage and a real Redis child process are isolated
+to the run; Redis uses `REDIS_SERVER_BIN`, PATH, or the existing workspace build.
+Rust gateway admission uses its memory store. Front fillers and ambience are disabled; EOT
+settings inherit the supplied dotenv. No echo injection is performed here.
+
+Assertions require every reply to produce audio and terminal marks, the promise
+and closure ladders to be reached, five final caller utterances, one natural
+EndCall, no remaining call/socket owners/checkpoints, a completed database record,
+one queued post-call job, graceful process shutdown, and independent
+STT agreement with each returned speech segment (normalized WER <= 0.25).
+Uvicorn's SIGTERM exit convention is accepted only when its lifespan cleanup
+record proves call cleanup; queued post-call worker execution is outside this smoke.
+Artifacts include `summary.json`, `latency-breakdown.json`, `turn-api.json`, `provider-events.json`,
+per-commit checkpoints, audio WAVs, service logs and source/binary hashes. All
+run artifacts remain local and ignored.
+
+Latency separates STT endpointing, Python Turn HTTP time, TTS first audio, and the
+three observed forwarding intervals through Rust. The latter include local proxy,
+socket and scheduler overhead; they are not isolated Rust CPU measurements or a
+capacity benchmark. Each conversation has only five sequential turns.
+
+Speculative execution is verified from committed `end_of_turn` ledger rows,
+including `reused_speculative`, rather than inferred from eager event delivery.
+The harness also requires eager HTTP acknowledgements to contain no speech.
+Source hashes matter: the Python implementation changed during the local runs
+below, so the first run's lack of engine speculation is not the latest behavior.
+
+### Local evidence, 2026-10-19
+
+| Run | Outcome |
+|---|---|
+| `python-ladder-20261019-01` | All five conversation turns and six audio checks passed. Overall harness failed because of Uvicorn's SIGTERM convention and incomplete intake/cleanup fixtures. Earlier Python engine did not speculate. |
+| `python-ladder-20261019-02` | Preflight failure: Redis was not on PATH; no service call ran. The harness now finds the existing workspace binary. |
+| `python-ladder-20261019-03` | Deployment EOT settings split “Yes, now is a good time” into distinct final transcripts “Yes.” and “now is a good time.” The first reply was interrupted. Cleanup passed with real Redis and the seeded call record. |
+| `python-ladder-20261019-04` | Controlled EOT smoke passed: five finals, six completed audio segments, natural `caller_farewell`, no leftover call/socket/checkpoint state, database state `done`, one queued post-call job and graceful shutdown. |
+
+The baseline phone query was eager `0.7`, final `0.85`, timeout `1400 ms`.
+The controlled run uses `--controlled-eot`: eager `0.3`, final `1.0`, timeout
+`3000 ms`. This override does not change the deployment dotenv.
+
+Between baseline and controlled runs, the externally modified Python `api.py`
+and `engine_host.py` gained engine speculation. In the controlled run, **all five
+committed turns reused speculative results**; eleven eager acknowledgements
+contained no speech, and six resumed events were observed. Independent output
+transcription WER was 0–4.17%. Rust produced an 8 kHz stereo recording of 108.1 s.
+The first run remains evidence of the earlier source version, not a regression
+claim against the later implementation.
+
+| Observed mean, five turns | Baseline | Controlled EOT / updated Python |
+|---|---:|---:|
+| Speech end to first returned audio | 2022 ms | 3422 ms |
+| STT endpointing | 602 ms | 3160 ms |
+| Final Turn HTTP request/response | 1262 ms | 128 ms |
+| TTS request to first provider audio | 155 ms | 132 ms |
+| Three Rust forwarding boundaries combined | 2.58 ms | 2.37 ms |
+
+The 128 ms is final-result reuse/commit time: model reasoning ran earlier under
+eager execution. Both Python code and EOT configuration changed, so this is not
+an isolated speedup comparison. Forwarding intervals include loopback observer
+overhead and do not measure total Rust CPU or pre-STT audio processing.
+
+Local `python-ladder-20261019-comparison.json` preserves every run's outcome.
+Run 04's `verified-report.json` and `speculation-verification.json` correct the
+original harness's stale assumption about Python speculation using committed
+ledger evidence; the original `summary.json` remains unchanged. Deployment EOT
+reliability and broad speculative race/load acceptance remain open.
+
+## Echo acceptance suite
+
 This opt-in harness runs generated speech through the production Rust service
 router, native Driver/Session, live Deepgram Flux STT, a local echo Turn API and
 live Deepgram TTS. A separate STT request verifies the audio captured at the caller.
