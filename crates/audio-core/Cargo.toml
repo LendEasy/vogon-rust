@@ -1,0 +1,16 @@
+[package]
+name = "vogon-audio-core"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "Apache-2.0"
+repository = "https://github.com/LendEasy/vogon-rust"
+
+[dependencies]
+pyo3 = { version = "=0.30.1", features = ["auto-initialize"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[[bin]]
+name = "vogon-audio-validation"
+path = "src/bin/validation.rs"
