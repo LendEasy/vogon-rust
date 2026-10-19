@@ -1,0 +1,24 @@
+[package]
+name = "vogon-transport"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "Apache-2.0"
+repository = "https://github.com/LendEasy/vogon-rust"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+base64 = "0.22"
+vogon-speech-providers = { path = "../speech-providers" }
+vogon-clocks = { path = "../clocks" }
+vogon-audio-runtime = { path = "../audio-runtime" }
+vogon-playback = { path = "../playback" }
+vogon-barge-in = { path = "../barge-in" }
+vogon-front = { path = "../front" }
+
+[dev-dependencies]
+futures-util = { version = "0.3", features = ["sink"] }
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-native-roots"] }
+vogon-configuration = { path = "../configuration" }
