@@ -1,0 +1,8 @@
+[workspace]
+members = ["crates/contracts", "crates/configuration"]
+exclude = ["prototypes/dsp-kernels", "prototypes/numpy-bridge"]
+resolver = "3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

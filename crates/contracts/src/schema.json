@@ -1,0 +1,1255 @@
+{
+  "Threshold": {
+    "fields": {
+      "id": {
+        "hint": {
+          "scalar": "str"
+        }
+      },
+      "after_sec": {
+        "hint": {
+          "scalar": "float"
+        }
+      }
+    },
+    "kind": null
+  },
+  "FillerPolicy": {
+    "fields": {
+      "first_after_ms": {
+        "hint": {
+          "scalar": "float"
+        }
+      },
+      "interval_ms": {
+        "hint": {
+          "scalar": "float"
+        }
+      },
+      "max": {
+        "hint": {
+          "scalar": "int"
+        }
+      },
+      "phrases": {
+        "hint": {
+          "list": {
+            "scalar": "str"
+          }
+        },
+        "default": []
+      },
+      "continuations": {
+        "hint": {
+          "list": {
+            "scalar": "str"
+          }
+        },
+        "default": []
+      }
+    },
+    "kind": null
+  },
+  "RecordingPolicy": {
+    "fields": {
+      "enabled": {
+        "hint": {
+          "scalar": "bool"
+        },
+        "default": true
+      },
+      "channels": {
+        "hint": {
+          "scalar": "str"
+        },
+        "default": "stereo"
+      }
+    },
+    "kind": null
+  },
+  "BargePolicy": {
+    "fields": {
+      "safety_phrases": {
+        "hint": {
+          "list": {
+            "scalar": "str"
+          }
+        },
+        "default": []
+      },
+      "floor_request_phrases": {
+        "hint": {
+          "list": {
+            "scalar": "str"
+          }
+        },
+        "default": []
+      },
+      "semantic_judge": {
+        "hint": {
+          "scalar": "bool"
+        },
+        "default": true
+      }
+    },
+    "kind": null
+  },
+  "LineDetection": {
+    "fields": {
+      "enabled": {
+        "hint": {
+          "scalar": "bool"
+        },
+        "default": false
+      },
+      "min_words": {
+        "hint": {
+          "scalar": "int"
+        },
+        "default": 4
+      },
+      "machine_p": {
+        "hint": {
+          "scalar": "float"
+        },
+        "default": 0.6
+      },
+      "human_p": {
+        "hint": {
+          "scalar": "float"
+        },
+        "default": 0.3
+      },
+      "ask_window_s": {
+        "hint": {
+          "scalar": "float"
+        },
+        "default": 2.0
+      },
+      "quiet_ms": {
+        "hint": {
+          "scalar": "int"
+        },
+        "default": 700
+      },
+      "cap_s": {
+        "hint": {
+          "scalar": "float"
+        },
+        "default": 8.0
+      }
+    },
+    "kind": null
+  },
+  "CallConfig": {
+    "fields": {
+      "persona_voice": {
+        "hint": {
+          "scalar": "str"
+        }
+      },
+      "persona_name": {
+        "hint": {
+          "scalar": "str"
+        },
+        "default": ""
+      },
+      "language": {
+        "hint": {
+          "scalar": "str"
+        },
+        "default": "en-US"
+      },
+      "ambience": {
+        "hint": {
+          "optional": {
+            "scalar": "dict"
+          }
+        },
+        "default": null
+      },
+      "name_hint": {
+        "hint": {
+          "optional": {
+            "scalar": "str"
+          }
+        },
+        "default": null
+      },
+      "workflow_id": {
+        "hint": {
+          "scalar": "str"
+        },
+        "default": ""
+      },
+      "silence_thresholds": {
+        "hint": {
+          "list": {
+            "class": "Threshold"
+          }
+        },
+        "default": []
+      },
+      "duration_thresholds": {
+        "hint": {
+          "list": {
+            "class": "Threshold"
+          }
+        },
+        "default": []
+      },
+      "opening_silence_thresholds": {
+        "hint": {
+          "list": {
+            "class": "Threshold"
+          }
+        },
+        "default": []
+      },
+      "silence_ladder": {
+        "hint": {
+          "scalar": "str"
+        },
+        "default": "default"
+      },
+      "line_detection": {
+        "hint": {
+          "optional": {
+            "class": "LineDetection"
+          }
+        },
+        "default": null
+      },
+      "filler": {
+        "hint": {
+          "optional": {
+            "class": "FillerPolicy"
+          }
+        },
+        "default": null
+      },
+      "recording": {
+        "hint": {
+          "optional": {
+            "class": "RecordingPolicy"
+          }
+        },
+        "default": null
+      },
+      "barge_policy": {
+        "hint": {
+          "optional": {
+            "class": "BargePolicy"
+          }
+        },
+        "default": null
+      },
+      "trouble_farewell": {
+        "hint": {
+          "scalar": "str"
+        },
+        "default": ""
+      }
+    },
+    "kind": null
+  },
+  "EscalationTarget": {
+    "fields": {
+      "number": {
+        "hint": {
+          "scalar": "str"
+        }
+      },
+      "label": {
+        "hint": {
+          "scalar": "str"
+        },
+        "default": ""
+      }
+    },
+    "kind": null
+  },
+  "EscalationOrder": {
+    "fields": {
+      "escalation_id": {
+        "hint": {
+          "scalar": "str"
+        },
+        "default": ""
+      },
+      "targets": {
+        "hint": {
+          "list": {
+            "class": "EscalationTarget"
+          }
+        },
+        "default": []
+      },
+      "whisper_text": {
+        "hint": {
+          "scalar": "str"
+        },
+        "default": ""
+      },
+      "agent_timeout_sec": {
+        "hint": {
+          "scalar": "float"
+        },
+        "default": 30.0
+      },
+      "hold_message": {
+        "hint": {
+          "scalar": "str"
+        },
+        "default": ""
+      },
+      "hold_music_url": {
+        "hint": {
+          "scalar": "str"
+        },
+        "default": ""
+      },
+      "voicemail_script": {
+        "hint": {
+          "scalar": "str"
+        },
+        "default": ""
+      },
+      "callback_message": {
+        "hint": {
+          "scalar": "str"
+        },
+        "default": ""
+      }
+    },
+    "kind": null
+  },
+  "SpeakCommand": {
+    "fields": {
+      "audio_id": {
+        "hint": {
+          "scalar": "str"
+        }
+      },
+      "text": {
+        "hint": {
+          "scalar": "str"
+        }
+      },
+      "protected": {
+        "hint": {
+          "scalar": "bool"
+        },
+        "default": false
+      },
+      "absorb_barge": {
+        "hint": {
+          "scalar": "bool"
+        },
+        "default": false
+      },
+      "play_after": {
+        "hint": {
+          "scalar": "str"
+        },
+        "default": "now"
+      },
+      "agent_id": {
+        "hint": {
+          "scalar": "str"
+        },
+        "default": ""
+      }
+    },
+    "kind": null
+  },
+  "HeardHorizon": {
+    "fields": {
+      "completed": {
+        "hint": {
+          "list": {
+            "scalar": "str"
+          }
+        },
+        "default": []
+      },
+      "in_flight": {
+        "hint": {
+          "optional": {
+            "scalar": "str"
+          }
+        },
+        "default": null
+      },
+      "in_flight_heard_text": {
+        "hint": {
+          "scalar": "str"
+        },
+        "default": ""
+      },
+      "last_heard_text": {
+        "hint": {
+          "scalar": "str"
+        },
+        "default": ""
+      },
+      "unheard_text": {
+        "hint": {
+          "scalar": "str"
+        },
+        "default": ""
+      }
+    },
+    "kind": null
+  },
+  "AbsorbedUtterance": {
+    "fields": {
+      "text": {
+        "hint": {
+          "scalar": "str"
+        }
+      },
+      "verdict": {
+        "hint": {
+          "scalar": "str"
+        }
+      },
+      "at": {
+        "hint": {
+          "scalar": "float"
+        },
+        "default": 0.0
+      }
+    },
+    "kind": null
+  },
+  "UtteranceFinal": {
+    "fields": {
+      "text": {
+        "hint": {
+          "scalar": "str"
+        }
+      },
+      "confidence": {
+        "hint": {
+          "scalar": "float"
+        }
+      },
+      "low_conf_words": {
+        "hint": {
+          "list": {
+            "scalar": "str"
+          }
+        }
+      },
+      "onset_at": {
+        "hint": {
+          "scalar": "float"
+        },
+        "default": 0.0
+      },
+      "heard": {
+        "hint": {
+          "optional": {
+            "class": "HeardHorizon"
+          }
+        },
+        "default": {
+          "completed": [],
+          "in_flight": null,
+          "in_flight_heard_text": "",
+          "last_heard_text": "",
+          "unheard_text": ""
+        }
+      },
+      "carry_forward": {
+        "hint": {
+          "optional": {
+            "class": "AbsorbedUtterance"
+          }
+        },
+        "default": null
+      },
+      "seq": {
+        "hint": {
+          "scalar": "int"
+        },
+        "default": 0
+      },
+      "at": {
+        "hint": {
+          "scalar": "float"
+        },
+        "default": 0.0
+      },
+      "playback_generation": {
+        "hint": {
+          "optional": {
+            "scalar": "int"
+          }
+        },
+        "default": null
+      }
+    },
+    "kind": "utterance_final"
+  },
+  "UtteranceEager": {
+    "fields": {
+      "text": {
+        "hint": {
+          "scalar": "str"
+        }
+      },
+      "confidence": {
+        "hint": {
+          "scalar": "float"
+        }
+      },
+      "low_conf_words": {
+        "hint": {
+          "list": {
+            "scalar": "str"
+          }
+        }
+      },
+      "onset_at": {
+        "hint": {
+          "scalar": "float"
+        },
+        "default": 0.0
+      },
+      "heard": {
+        "hint": {
+          "optional": {
+            "class": "HeardHorizon"
+          }
+        },
+        "default": {
+          "completed": [],
+          "in_flight": null,
+          "in_flight_heard_text": "",
+          "last_heard_text": "",
+          "unheard_text": ""
+        }
+      },
+      "carry_forward": {
+        "hint": {
+          "optional": {
+            "class": "AbsorbedUtterance"
+          }
+        },
+        "default": null
+      },
+      "seq": {
+        "hint": {
+          "scalar": "int"
+        },
+        "default": 0
+      },
+      "at": {
+        "hint": {
+          "scalar": "float"
+        },
+        "default": 0.0
+      },
+      "playback_generation": {
+        "hint": {
+          "optional": {
+            "scalar": "int"
+          }
+        },
+        "default": null
+      }
+    },
+    "kind": "utterance_eager"
+  },
+  "UtteranceResumed": {
+    "fields": {
+      "seq": {
+        "hint": {
+          "scalar": "int"
+        },
+        "default": 0
+      },
+      "at": {
+        "hint": {
+          "scalar": "float"
+        },
+        "default": 0.0
+      }
+    },
+    "kind": "utterance_resumed"
+  },
+  "UtteranceAbsorbed": {
+    "fields": {
+      "text": {
+        "hint": {
+          "scalar": "str"
+        }
+      },
+      "phase": {
+        "hint": {
+          "scalar": "str"
+        }
+      },
+      "verdict": {
+        "hint": {
+          "scalar": "str"
+        }
+      },
+      "source": {
+        "hint": {
+          "scalar": "str"
+        }
+      },
+      "window_ms": {
+        "hint": {
+          "scalar": "float"
+        },
+        "default": 0.0
+      },
+      "audio_id": {
+        "hint": {
+          "scalar": "str"
+        },
+        "default": ""
+      },
+      "final_text": {
+        "hint": {
+          "scalar": "str"
+        },
+        "default": ""
+      },
+      "onset_at": {
+        "hint": {
+          "scalar": "float"
+        },
+        "default": 0.0
+      },
+      "seq": {
+        "hint": {
+          "scalar": "int"
+        },
+        "default": 0
+      },
+      "at": {
+        "hint": {
+          "scalar": "float"
+        },
+        "default": 0.0
+      }
+    },
+    "kind": "utterance_absorbed"
+  },
+  "DeliveryOutcome": {
+    "fields": {
+      "audio_id": {
+        "hint": {
+          "scalar": "str"
+        }
+      },
+      "status": {
+        "hint": {
+          "scalar": "str"
+        }
+      },
+      "sentences_total": {
+        "hint": {
+          "scalar": "int"
+        },
+        "default": 0
+      },
+      "sentences_sent": {
+        "hint": {
+          "scalar": "int"
+        },
+        "default": 0
+      },
+      "heard_text": {
+        "hint": {
+          "scalar": "str"
+        },
+        "default": ""
+      },
+      "heard_fraction": {
+        "hint": {
+          "optional": {
+            "scalar": "float"
+          }
+        },
+        "default": null
+      },
+      "first_chunk_ms": {
+        "hint": {
+          "optional": {
+            "scalar": "float"
+          }
+        },
+        "default": null
+      },
+      "audio_ms": {
+        "hint": {
+          "optional": {
+            "scalar": "float"
+          }
+        },
+        "default": null
+      },
+      "chunks_sent": {
+        "hint": {
+          "scalar": "int"
+        },
+        "default": 0
+      },
+      "mark_pending": {
+        "hint": {
+          "scalar": "bool"
+        },
+        "default": false
+      },
+      "seq": {
+        "hint": {
+          "scalar": "int"
+        },
+        "default": 0
+      },
+      "at": {
+        "hint": {
+          "scalar": "float"
+        },
+        "default": 0.0
+      },
+      "text": {
+        "hint": {
+          "scalar": "str"
+        },
+        "default": ""
+      },
+      "origin": {
+        "hint": {
+          "scalar": "str"
+        },
+        "default": ""
+      }
+    },
+    "kind": "delivery_outcome"
+  },
+  "PlayoutFinished": {
+    "fields": {
+      "audio_id": {
+        "hint": {
+          "scalar": "str"
+        }
+      },
+      "seq": {
+        "hint": {
+          "scalar": "int"
+        },
+        "default": 0
+      },
+      "at": {
+        "hint": {
+          "scalar": "float"
+        },
+        "default": 0.0
+      }
+    },
+    "kind": "playout_finished"
+  },
+  "DrainCleared": {
+    "fields": {
+      "audio_id": {
+        "hint": {
+          "scalar": "str"
+        }
+      },
+      "seq": {
+        "hint": {
+          "scalar": "int"
+        },
+        "default": 0
+      },
+      "at": {
+        "hint": {
+          "scalar": "float"
+        },
+        "default": 0.0
+      }
+    },
+    "kind": "drain_cleared"
+  },
+  "EscalationOutcome": {
+    "fields": {
+      "status": {
+        "hint": {
+          "scalar": "str"
+        }
+      },
+      "target": {
+        "hint": {
+          "scalar": "str"
+        },
+        "default": ""
+      },
+      "detail": {
+        "hint": {
+          "scalar": "str"
+        },
+        "default": ""
+      },
+      "seq": {
+        "hint": {
+          "scalar": "int"
+        },
+        "default": 0
+      },
+      "at": {
+        "hint": {
+          "scalar": "float"
+        },
+        "default": 0.0
+      },
+      "escalation_id": {
+        "hint": {
+          "scalar": "str"
+        },
+        "default": ""
+      }
+    },
+    "kind": "escalation_outcome"
+  },
+  "EscalationLegEvent": {
+    "fields": {
+      "escalation_id": {
+        "hint": {
+          "scalar": "str"
+        }
+      },
+      "seq": {
+        "hint": {
+          "scalar": "int"
+        }
+      },
+      "event": {
+        "hint": {
+          "scalar": "str"
+        }
+      },
+      "target": {
+        "hint": {
+          "scalar": "str"
+        },
+        "default": ""
+      },
+      "attempt": {
+        "hint": {
+          "scalar": "int"
+        },
+        "default": 0
+      },
+      "agent_call_sid": {
+        "hint": {
+          "scalar": "str"
+        },
+        "default": ""
+      },
+      "detail": {
+        "hint": {
+          "scalar": "str"
+        },
+        "default": ""
+      },
+      "at_utc": {
+        "hint": {
+          "scalar": "float"
+        },
+        "default": 0.0
+      }
+    },
+    "kind": "escalation_leg"
+  },
+  "EscalationResolved": {
+    "fields": {
+      "escalation_id": {
+        "hint": {
+          "scalar": "str"
+        }
+      },
+      "seq": {
+        "hint": {
+          "scalar": "int"
+        }
+      },
+      "result": {
+        "hint": {
+          "scalar": "str"
+        }
+      },
+      "connected_target": {
+        "hint": {
+          "scalar": "str"
+        },
+        "default": ""
+      },
+      "attempts": {
+        "hint": {
+          "scalar": "int"
+        },
+        "default": 0
+      },
+      "hold_sec": {
+        "hint": {
+          "scalar": "float"
+        },
+        "default": 0.0
+      },
+      "talk_sec": {
+        "hint": {
+          "scalar": "float"
+        },
+        "default": 0.0
+      },
+      "detail": {
+        "hint": {
+          "scalar": "str"
+        },
+        "default": ""
+      },
+      "at_utc": {
+        "hint": {
+          "scalar": "float"
+        },
+        "default": 0.0
+      }
+    },
+    "kind": "escalation_resolved"
+  },
+  "LineVerdict": {
+    "fields": {
+      "answered_by": {
+        "hint": {
+          "scalar": "str"
+        }
+      },
+      "probability": {
+        "hint": {
+          "scalar": "float"
+        }
+      },
+      "source": {
+        "hint": {
+          "scalar": "str"
+        }
+      },
+      "transcript": {
+        "hint": {
+          "scalar": "str"
+        },
+        "default": ""
+      },
+      "latency_ms": {
+        "hint": {
+          "scalar": "float"
+        },
+        "default": 0.0
+      },
+      "seq": {
+        "hint": {
+          "scalar": "int"
+        },
+        "default": 0
+      },
+      "at": {
+        "hint": {
+          "scalar": "float"
+        },
+        "default": 0.0
+      }
+    },
+    "kind": "line_verdict"
+  },
+  "SilenceThreshold": {
+    "fields": {
+      "threshold_id": {
+        "hint": {
+          "scalar": "str"
+        }
+      },
+      "silent_for_sec": {
+        "hint": {
+          "scalar": "float"
+        }
+      },
+      "seq": {
+        "hint": {
+          "scalar": "int"
+        },
+        "default": 0
+      },
+      "at": {
+        "hint": {
+          "scalar": "float"
+        },
+        "default": 0.0
+      }
+    },
+    "kind": "silence_threshold"
+  },
+  "DurationThreshold": {
+    "fields": {
+      "threshold_id": {
+        "hint": {
+          "scalar": "str"
+        }
+      },
+      "elapsed_sec": {
+        "hint": {
+          "scalar": "float"
+        }
+      },
+      "seq": {
+        "hint": {
+          "scalar": "int"
+        },
+        "default": 0
+      },
+      "at": {
+        "hint": {
+          "scalar": "float"
+        },
+        "default": 0.0
+      }
+    },
+    "kind": "duration_threshold"
+  },
+  "RecordTransferRequest": {
+    "fields": {
+      "call_id": {
+        "hint": {
+          "scalar": "str"
+        }
+      },
+      "request_id": {
+        "hint": {
+          "scalar": "str"
+        }
+      },
+      "events": {
+        "hint": {
+          "list": {
+            "union": "PostCallFact"
+          }
+        },
+        "default": []
+      }
+    },
+    "kind": null
+  },
+  "RecordTransferResponse": {
+    "fields": {
+      "appended": {
+        "hint": {
+          "scalar": "int"
+        },
+        "default": 0
+      }
+    },
+    "kind": null
+  },
+  "StartCallRequest": {
+    "fields": {
+      "call_id": {
+        "hint": {
+          "scalar": "str"
+        }
+      },
+      "mode": {
+        "hint": {
+          "scalar": "str"
+        }
+      },
+      "resume": {
+        "hint": {
+          "scalar": "bool"
+        },
+        "default": false
+      },
+      "payload": {
+        "hint": {
+          "scalar": "dict"
+        },
+        "default": {}
+      }
+    },
+    "kind": null
+  },
+  "StartCallResponse": {
+    "fields": {
+      "call_config": {
+        "hint": {
+          "class": "CallConfig"
+        }
+      },
+      "speak": {
+        "hint": {
+          "list": {
+            "class": "SpeakCommand"
+          }
+        },
+        "default": []
+      },
+      "state_version": {
+        "hint": {
+          "scalar": "int"
+        },
+        "default": 0
+      },
+      "client_events": {
+        "hint": {
+          "list": {
+            "class": "ClientEvent"
+          }
+        },
+        "default": []
+      }
+    },
+    "kind": null
+  },
+  "ProcessEventsRequest": {
+    "fields": {
+      "call_id": {
+        "hint": {
+          "scalar": "str"
+        }
+      },
+      "request_id": {
+        "hint": {
+          "scalar": "str"
+        }
+      },
+      "events": {
+        "hint": {
+          "list": {
+            "union": "TransportEvent"
+          }
+        },
+        "default": []
+      }
+    },
+    "kind": null
+  },
+  "ClientEvent": {
+    "fields": {
+      "type": {
+        "hint": {
+          "scalar": "str"
+        }
+      },
+      "payload": {
+        "hint": {
+          "scalar": "dict"
+        },
+        "default": {}
+      }
+    },
+    "kind": null
+  },
+  "ProcessEventsResponse": {
+    "fields": {
+      "speak": {
+        "hint": {
+          "list": {
+            "class": "SpeakCommand"
+          }
+        },
+        "default": []
+      },
+      "action": {
+        "hint": {
+          "scalar": "str"
+        },
+        "default": "continue"
+      },
+      "end_reason": {
+        "hint": {
+          "optional": {
+            "scalar": "str"
+          }
+        },
+        "default": null
+      },
+      "client_events": {
+        "hint": {
+          "list": {
+            "class": "ClientEvent"
+          }
+        },
+        "default": []
+      },
+      "escalation": {
+        "hint": {
+          "optional": {
+            "class": "EscalationOrder"
+          }
+        },
+        "default": null
+      },
+      "silence_grace_sec": {
+        "hint": {
+          "optional": {
+            "scalar": "float"
+          }
+        },
+        "default": null
+      },
+      "silence_ladder": {
+        "hint": {
+          "optional": {
+            "scalar": "str"
+          }
+        },
+        "default": null
+      }
+    },
+    "kind": null
+  },
+  "EndCallRequest": {
+    "fields": {
+      "call_id": {
+        "hint": {
+          "scalar": "str"
+        }
+      },
+      "reason": {
+        "hint": {
+          "scalar": "str"
+        }
+      },
+      "events": {
+        "hint": {
+          "list": {
+            "union": "TransportEvent"
+          }
+        },
+        "default": []
+      },
+      "transport_analytics": {
+        "hint": {
+          "scalar": "any"
+        },
+        "default": []
+      },
+      "provider_call_id": {
+        "hint": {
+          "scalar": "str"
+        },
+        "default": ""
+      }
+    },
+    "kind": null
+  },
+  "EndCallResponse": {
+    "fields": {},
+    "kind": null
+  }
+}
