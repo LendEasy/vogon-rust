@@ -74,6 +74,8 @@ pub struct HttpTurnClient {
     http: reqwest::Client,
     lock: Mutex<()>,
     started: AtomicBool,
+    retry: Option<vogon_resilience::Policy>,
+    metrics: Option<std::sync::Arc<vogon_observability::Metrics>>,
 }
 impl HttpTurnClient {
     /// Create a client with no automatic redirects/retries. Deployment HTTP is allowed for internal services.
@@ -100,13 +102,39 @@ impl HttpTurnClient {
             http,
             lock: Mutex::new(()),
             started: AtomicBool::new(false),
+            retry: None,
+            metrics: None,
         })
+    }
+    /// Install the host retry policy; request bodies and replay IDs remain stable.
+    pub fn with_retry(mut self, policy: vogon_resilience::Policy) -> Self {
+        self.retry = Some(policy);
+        self
+    }
+    /// Install aggregate latency/error metrics without sharing per-call serialization.
+    pub fn with_metrics(mut self, metrics: std::sync::Arc<vogon_observability::Metrics>) -> Self {
+        self.metrics = Some(metrics);
+        self
     }
     /// True only after a valid start response; failed starts are finalized server-side.
     pub fn started(&self) -> bool {
         self.started.load(Ordering::Acquire)
     }
     async fn post<T: serde::de::DeserializeOwned>(
+        &self,
+        operation: &str,
+        body: Value,
+        response: &str,
+        end: bool,
+    ) -> Result<T> {
+        let start = std::time::Instant::now();
+        let result = self.post_inner(operation, body, response, end).await;
+        if let Some(metrics) = &self.metrics {
+            metrics.turn(start.elapsed(), result.is_ok());
+        }
+        result
+    }
+    async fn post_inner<T: serde::de::DeserializeOwned>(
         &self,
         operation: &str,
         mut body: Value,
@@ -120,7 +148,9 @@ impl HttpTurnClient {
             );
         }
         let _ordered = self.lock.lock().await;
-        let attempts = if end {
+        let attempts = if let Some(policy) = &self.retry {
+            policy.attempts
+        } else if end {
             2
         } else {
             self.config.retry_delays.len() + 1
@@ -141,7 +171,9 @@ impl HttpTurnClient {
                     .send()
                     .await
                     .map_err(|_| Error::new("turn_service_unavailable"))?;
-                if r.status().as_u16() >= 500 {
+                if r.status().as_u16() >= 500
+                    || (self.retry.is_some() && matches!(r.status().as_u16(), 408 | 429))
+                {
                     return Err(Error::new("turn_service_unavailable"));
                 }
                 if !r.status().is_success() {
@@ -174,7 +206,8 @@ impl HttpTurnClient {
                         .or_else(|| self.config.retry_delays.last())
                         .copied()
                         .unwrap_or(Duration::ZERO);
-                    tokio::time::sleep(delay).await;
+                    tokio::time::sleep(self.retry.as_ref().map_or(delay, |p| p.delay(attempt)))
+                        .await;
                 }
                 other => return other,
             }

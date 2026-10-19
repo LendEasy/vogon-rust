@@ -85,6 +85,8 @@ pub fn router(service: Arc<Service>) -> Router {
     let limit = service.config.max_message_bytes;
     Router::new()
         .route("/health", get(health))
+        .route("/ready", get(ready))
+        .route("/metrics", get(metrics))
         .route("/v1/tenants/{tenant}/calls", post(create))
         .route("/v1/tenants/{tenant}/calls/{call_id}", get(inspect))
         .route("/v1/twilio/twiml", get(stream_twiml).post(stream_twiml))
@@ -102,8 +104,48 @@ pub fn router(service: Arc<Service>) -> Router {
 /// Report basic liveness and socket ownership, not native/provider readiness.
 async fn health(AppState(s): AppState<Arc<Service>>) -> Json<Value> {
     Json(
-        json!({"ok":!s.is_stopping(),"service":"voice-gateway","capabilities":{},"active_sockets":s.active()}),
+        json!({"ok":!s.is_stopping(),"service":"voice-gateway","capabilities":s.native_checks.get(),"active_sockets":s.active()}),
     )
+}
+/// Startup and mode-specific readiness; does not make paid provider requests.
+async fn ready(
+    AppState(s): AppState<Arc<Service>>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Response {
+    if s.native_checks.get().is_none()
+        || !s.artifact_ready.load(std::sync::atomic::Ordering::Acquire)
+    {
+        let _ = s.startup().await;
+    }
+    let result = s
+        .readiness(query.get("mode").map_or("text", String::as_str))
+        .await;
+    (
+        if result["ready"] == true {
+            StatusCode::OK
+        } else {
+            StatusCode::SERVICE_UNAVAILABLE
+        },
+        Json(result),
+    )
+        .into_response()
+}
+/// Fixed-cardinality metrics protected by the same application service credential.
+async fn metrics(AppState(s): AppState<Arc<Service>>, h: HeaderMap) -> HttpResult<Response> {
+    authorize(&s, &h)?;
+    let ready = s.readiness("text").await["ready"] == true;
+    Ok((
+        [("content-type", "text/plain; version=0.0.4; charset=utf-8")],
+        s.metrics.prometheus(
+            s.active(),
+            s.config.max_active,
+            ready,
+            s.transfers
+                .report_failures
+                .load(std::sync::atomic::Ordering::Relaxed),
+        ),
+    )
+        .into_response())
 }
 /// Application HTTP endpoint, authorization and optional physical-status webhook.
 #[derive(Deserialize)]
@@ -222,7 +264,7 @@ async fn create(
             .map_err(storage)?;
         let dial = body.twilio.unwrap();
         let value = |key: &str| s.config.settings[key].as_str().unwrap_or("");
-        match twilio::dial(
+        match twilio::dial_with_retry(
             &s.http,
             twilio::Dial {
                 endpoint: &s.config.twilio_endpoint,
@@ -237,6 +279,7 @@ async fn create(
                 base: &base,
                 session_token: &record.session_token,
             },
+            &s.config.retries.twilio,
         )
         .await
         {
@@ -495,6 +538,9 @@ async fn escalation(
             data,
         )
             .into_response());
+    }
+    if s.is_stopping() {
+        return Err(Failure(StatusCode::SERVICE_UNAVAILABLE, "service stopping"));
     }
     let form = url::form_urlencoded::parse(body.as_bytes())
         .into_owned()

@@ -63,6 +63,9 @@ pub struct Config {
     pub line: Option<vogon_front::line::Config>,
     /// Caller-name hint used only in the line instrument's existing context shape.
     pub name_hint: String,
+    /// Startup/reconnect retry budgets; no active audio is replayed.
+    pub stt_retry: vogon_resilience::Policy,
+    pub tts_retry: vogon_resilience::Policy,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -82,6 +85,8 @@ impl Default for Config {
             line_client: None,
             line: None,
             name_hint: String::new(),
+            stt_retry: vogon_resilience::Policy::once(),
+            tts_retry: vogon_resilience::Policy::once(),
         }
     }
 }
@@ -174,6 +179,12 @@ impl Config {
             serde_json::from_value(resolved["floor_request_phrases"].clone())
                 .map_err(|_| Error::new("invalid_barge_policy"))?;
         cfg.policy.ambience = cfg.audio.ambience;
+        if !settings["dependency_retries"].is_null() {
+            cfg.stt_retry = serde_json::from_value(settings["dependency_retries"]["stt"].clone())
+                .map_err(|_| Error::new("invalid_stt_retry"))?;
+            cfg.tts_retry = serde_json::from_value(settings["dependency_retries"]["tts"].clone())
+                .map_err(|_| Error::new("invalid_tts_retry"))?;
+        }
         Ok(cfg)
     }
 }
@@ -364,12 +375,23 @@ impl Session {
             let settings = settings.ok_or_else(|| Error::new("missing_speech_settings"))?;
             let phone = config.mode == Mode::Twilio;
             let (client, events) = if let Some((live, key)) = &config.live {
-                let (client, events) =
-                    LiveClient::connect(stt_endpoint, live.clone(), key.clone(), clock.clone())
-                        .await?;
+                let (client, events) = config
+                    .stt_retry
+                    .run(
+                        || {
+                            LiveClient::connect(
+                                stt_endpoint,
+                                live.clone(),
+                                key.clone(),
+                                clock.clone(),
+                            )
+                        },
+                        vogon_speech_providers::wire::retryable,
+                    )
+                    .await?;
                 (Listener::Live(client), events)
             } else {
-                let (client, events) = SttClient::connect(
+                let (client, events) = SttClient::connect_with_retry(
                     stt_endpoint,
                     if phone {
                         settings.phone.clone()
@@ -378,6 +400,7 @@ impl Session {
                     },
                     settings.key.clone(),
                     clock.clone(),
+                    config.stt_retry.clone(),
                 )
                 .await?;
                 (Listener::Flux(client), events)
@@ -385,7 +408,7 @@ impl Session {
             stt = Some(client);
             output = Some(events);
             tts = Some(
-                TtsClient::connect(
+                TtsClient::connect_with_retry(
                     tts_endpoint,
                     if phone {
                         settings.phone_tts.clone()
@@ -394,6 +417,7 @@ impl Session {
                     },
                     settings.key.clone(),
                     clock.clone(),
+                    config.tts_retry.clone(),
                 )
                 .await?,
             );
@@ -445,6 +469,11 @@ impl Session {
                             }
                         }
                         SttOutput::Error { error } => {
+                            inner.observe(
+                                inner.clock.now(),
+                                "provider_error",
+                                json!({"provider":"stt","code":error.code}),
+                            );
                             let _ = inner.events.send(
                                 json!({"kind":"provider_error","provider":"stt","error":error}),
                             );

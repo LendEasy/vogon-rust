@@ -490,7 +490,7 @@ async fn clear_waits_for_inflight_reference_and_discards_queued_media() {
     let first = tokio::spawn(async move {
         w.send(
             Some(0),
-            wire::media("MZ", &vec![5; 160]),
+            wire::media("MZ", &[5; 160]),
             Receipt::Media(vec![5; 160]),
         )
         .await
@@ -500,7 +500,7 @@ async fn clear_waits_for_inflight_reference_and_discards_queued_media() {
     let queued = tokio::spawn(async move {
         w.send(
             Some(0),
-            wire::media("MZ", &vec![6; 160]),
+            wire::media("MZ", &[6; 160]),
             Receipt::Media(vec![6; 160]),
         )
         .await

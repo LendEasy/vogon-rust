@@ -87,6 +87,9 @@ impl Fixture {
         let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let manager = Manager::new(
             Config {
+                report_retry: None,
+                rest_retry: vogon_resilience::Policy::once(),
+                tts_retry: vogon_resilience::Policy::once(),
                 endpoint: format!("{base}/2010-04-01"),
                 account: "ACtest".into(),
                 token: "test".into(),
@@ -450,4 +453,33 @@ async fn prepared_transfer_has_no_provider_side_effects_and_can_be_canceled() {
     f.manager.discard_prepared("CAcaller").await.unwrap();
     assert_eq!(f.start("CAcaller", 1).await, "failed");
     assert!(f.seen.rest.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn cancelling_shutdown_drain_aborts_report_retry_sleep() {
+    let mut f = Fixture::new().await;
+    let config = &mut Arc::get_mut(&mut f.manager).unwrap().config;
+    config.report_retry = Some(vogon_resilience::Policy {
+        attempts: 5,
+        initial_ms: 300,
+        max_ms: 300,
+        jitter: false,
+    });
+    f.seen.retry.store(100, Ordering::SeqCst);
+    assert_eq!(f.start("CAshutdown", 1).await, "initiated");
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while f.seen.facts.lock().unwrap().is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(10), f.manager.drain())
+            .await
+            .is_err()
+    );
+    let count = f.seen.facts.lock().unwrap().len();
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert_eq!(f.seen.facts.lock().unwrap().len(), count);
 }

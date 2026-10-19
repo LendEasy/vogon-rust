@@ -36,6 +36,7 @@ pub struct Http {
     client: Client,
     url: Url,
     key: Key,
+    retry: Option<vogon_resilience::Policy>,
 }
 impl Http {
     /// Require HTTPS except loopback fixtures. Redirects and implicit retries are disabled.
@@ -56,10 +57,35 @@ impl Http {
             .retry(reqwest::retry::never())
             .build()
             .map_err(|_| Error::new("provider_client_failed"))?;
-        Ok(Self { client, url, key })
+        Ok(Self {
+            client,
+            url,
+            key,
+            retry: None,
+        })
+    }
+    /// Set one retry owner for front/judge requests; the outer Jev loop then disables its legacy retries.
+    pub fn with_retry(mut self, policy: vogon_resilience::Policy) -> Self {
+        self.retry = Some(policy);
+        self
+    }
+    /// Whether the host supplied a retry budget rather than legacy Jev retry semantics.
+    pub fn retry_configured(&self) -> bool {
+        self.retry.is_some()
+    }
+    /// Send with configured exponential retry; cancellation stops request and backoff.
+    pub async fn post(&self, body: &Value, timeout: Duration) -> Result<Value> {
+        match &self.retry {
+            Some(policy) => {
+                policy
+                    .run(|| self.post_once(body, timeout), Error::retryable)
+                    .await
+            }
+            None => self.post_once(body, timeout).await,
+        }
     }
     /// Send one JSON request. Dropping the future cancels local request work.
-    pub async fn post(&self, body: &Value, timeout: Duration) -> Result<Value> {
+    async fn post_once(&self, body: &Value, timeout: Duration) -> Result<Value> {
         let operation = async {
             let mut response = self
                 .client

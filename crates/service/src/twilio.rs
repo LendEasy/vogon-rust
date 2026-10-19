@@ -93,6 +93,7 @@ pub fn ws_base(base: &str) -> String {
         .replacen("http://", "ws://", 1)
 }
 /// One outbound dial binding. Borrows credentials and deliberately omits Debug.
+#[derive(Clone)]
 pub struct Dial<'a> {
     pub endpoint: &'a str,
     pub account: &'a str,
@@ -101,6 +102,19 @@ pub struct Dial<'a> {
     pub from: &'a str,
     pub base: &'a str,
     pub session_token: &'a str,
+}
+/// Retry explicit throttling only. Ambiguous failures may have already created a physical call.
+pub async fn dial_with_retry(
+    client: &reqwest::Client,
+    request: Dial<'_>,
+    retry: &vogon_resilience::Policy,
+) -> Result<String> {
+    retry
+        .run(
+            || dial(client, request.clone()),
+            |e| e.0 == "twilio_throttled",
+        )
+        .await
 }
 /// Place a call using form-encoded REST and explicit webhook verbs; no SDK/Python.
 pub async fn dial(client: &reqwest::Client, request: Dial<'_>) -> Result<String> {
@@ -141,6 +155,9 @@ pub async fn dial(client: &reqwest::Client, request: Dial<'_>) -> Result<String>
         .send()
         .await
         .map_err(|_| Error::new("twilio_dial_failed"))?;
+    if response.status().as_u16() == 429 {
+        return Err(Error::new("twilio_throttled"));
+    }
     if !response.status().is_success() {
         return Err(Error::new("twilio_dial_failed"));
     }

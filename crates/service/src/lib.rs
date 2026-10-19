@@ -10,3 +10,6 @@ pub use vogon_orchestration::{Error, Future, Result, boxed};
 
 /// Call-local capture and actual-send observers.
 pub mod recording;
+
+/// Native capabilities and dynamic readiness.
+pub mod operations;

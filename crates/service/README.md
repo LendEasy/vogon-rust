@@ -3,9 +3,9 @@
 `vogon-service` supplies a runnable Axum/Tokio gateway host for the existing
 orchestrator. Text, browser and Twilio sockets use the same native `Driver` and
 `SessionFactory`; application reasoning remains behind the existing Turn API.
-Transfers, recording, operational readiness and deployment acceptance are still
-modules 11–13. This is an implemented host with local acceptance, not a claim of
-production readiness.
+Modules 11–13 now supply transfers, recording, dependency retries, native startup
+probes and metrics. Deployment acceptance remains incomplete; see
+[operations](../../OPERATIONS.md) for evidence and limits.
 
 ## Source responsibilities
 
@@ -19,6 +19,8 @@ production readiness.
 | `record.rs` | `Record`, `State`, `transition`, `decode`, `valid_id`, `utc_now` | Preserve schema-v1 JSON, ignore future fields, enforce monotonic physical-call state and retain first timestamps. Epoch timestamps are independent of `CallClock`. |
 | `store.rs` | `Store`, `Memory`, `Redis`, `Change`, `Ttl`, `Entry` | Atomic creation, tenant-qualified lookup, token/SID indexes, field updates, exclusive claims and expiry. Redis scripts compare complete JSON without Lua reserialization. |
 | `twilio.rs` | `signature`, `signed`, `state`, `twiml`, `Dial`, `dial` | Native HMAC validation, callback vocabulary, escaped XML and form-encoded REST dial. No Python Twilio SDK in the running Rust service. |
+| `recording.rs` | `Capture`, `RecordingSink` | Own call-local capture, observe actual sends/clears, emit scalar diagnostics and persist final artifacts. |
+| `operations.rs` | `Service::{startup,readiness}`, `native` | Execute cached native probes, check writable recording storage and expose bounded store/configuration readiness without paid provider calls. |
 | `bin/service-validation.rs` | JSON-lines adapter | Expose deterministic record/Twilio functions to the Python oracle; never load deployment credentials. |
 | `bin/service-live-host.rs` | Opt-in live validation launcher | Run the same service with localhost observation proxies and seeded synthetic phone records; read existing credentials only after explicit `--live`. |
 
@@ -118,6 +120,8 @@ Memory mode applies the same expiry policy, pruned on access.
 | Route | Implemented behavior |
 |---|---|
 | `GET /health` | Basic liveness and owned socket count; no provider/native readiness claim. |
+| `GET /ready?mode=text\|voice\|twilio` | Cached native/startup probes, current session-store read, mode credential presence and shutdown state. |
+| `GET /metrics` | Fixed-cardinality Prometheus metrics, using management service-key auth. |
 | `POST /v1/tenants/{tenant}/calls` | Pair-secret auth, request validation, persisted app binding and optional native REST dial. |
 | `GET /v1/tenants/{tenant}/calls/{call_id}` | Public state/timestamps only; excludes tokens, credentials and snapshots. |
 | `GET/POST /v1/twilio/twiml?token=...` | Signed URL/form validation, store lookup, stream or hangup XML. |
@@ -164,8 +168,9 @@ cargo run --locked --manifest-path vogon-rust/Cargo.toml \
 ```
 
 The default dotenv path is `voice-gateway/.env`, relative to the working directory.
-No credential file is copied. `--check` validates bootstrap/store connectivity;
-it is not module 13's native capability or provider-readiness check.
+No credential file is copied. `--check` validates bootstrap/store connectivity,
+executes native probes and prints text readiness. Provider credential presence
+is configuration readiness, not an external health or IAM check.
 
 ## Compatibility decisions and remaining limits
 
@@ -189,8 +194,9 @@ Rolling Python/Rust ownership compatibility is not accepted; stop existing calls
 before switching hosts. Status relays are best effort, not a durable outbox.
 An ambiguous dial response or process failure between provider dial and SID bind
 still needs reconciliation; do not infer exactly-once dialing from atomic records.
-Durable Turn API fact acknowledgement, richer health/metrics and deployment load
-acceptance remain in the module checklist.
+Durable Turn API fact acknowledgement and deployment load acceptance remain in
+the module checklist. Retry safety and shutdown budgets are documented in the
+[operations guide](../../OPERATIONS.md).
 
 ## Validation
 

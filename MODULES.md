@@ -2,18 +2,19 @@
 
 This is the working checklist for the migration. Checked items describe implemented
 work; unchecked items describe remaining implementation or acceptance work.
-Modules 1–10 have implemented cores, but are not all production-complete.
-Modules 11–12 are implemented and locally tested; module 13 is in progress.
+Modules 1–13 have implemented cores, but are not all production-complete.
+Modules 11–13 are wired and locally tested; deployment acceptance remains.
 
 Architecture and ownership: [implementation guide](ARCHITECTURE.md).
 API documentation: [documentation guide](DOCUMENTATION.md).
 
 The Rust workspace now includes a runnable HTTP/WebSocket host (`vogon-gateway`).
-Transfers, recording and production readiness remain incomplete.
+Transfers, recording, retries and operational probes are implemented. Production
+readiness remains incomplete; see [operations](OPERATIONS.md).
 Generated-audio calls now exercise this host with live Deepgram STT/TTS and a
 local echo Turn service: [acceptance report](validation/live/REPORT.md).
 This includes browser PCM and locally simulated Twilio media, not PSTN calls.
-Earlier live acceptance gaps remain deferred while modules 11–13 are implemented.
+Earlier live acceptance gaps remain deferred for the next fixes.
 An offline parity gate means the listed behavior matches the current Python
 implementation on the saved corpus. Text operations use Rust standard Unicode
 whitespace; the accepted differences for U+001C–U+001F are recorded separately
@@ -31,11 +32,11 @@ deployment or every behavior of the owning Python transport has been ported.
 | 6 | `speech-providers` | Deepgram streaming STT/TTS implemented and live-tested. 350 STT traces / 9,780 snapshots, 120 TTS traces, 300 merge + 100 RIFF cases. Eager/resumed/final behavior preserved. | Optional GPT Live implementation exists but testing is deferred at the user’s request. Production outage/concurrency acceptance remains. |
 | 7 | `clocks` | Monotonic clock, silence/duration ladders, nested pause/grace and overlap-aware playback watchdog implemented; 100 Python traces / 15,100 snapshots. Provider, floor and gap-ambience timers are wired. Six additional parallel isolation tests. | Reasoning lifecycle is wired through module 9; production timer/load acceptance remains. |
 | 8 | `front`: front responses and line detection | Implemented and wired to transport and orchestration: selection/guards, Jev/Cerebras clients, source/canned holds and line detector. 7,048 direct comparisons, 6,000 state snapshots; original combined native gate: 73 pass. | External provider and full-call acceptance remain; exact-word echo limitation is preserved. |
-| 9 | `orchestration`: call lifecycle | Core implemented: native Turn API, concurrent input/event collection, ordered response execution, eager/final invalidation, holds and finalization. Local eight-call/full-duplex and clock-isolation tests. | Real transfer/artifact hooks, durable fact acknowledgement, full observability and live-call acceptance. |
-| 10 | `service`: HTTP service/session management | Implemented host: HTTP/WebSocket routes, auth, admission, dotenv/profile bootstrap, native Twilio REST/signatures and atomic memory/Redis records. Local browser/text/phone integration tests. | Transfers/artifact hooks, long-call lease renewal/crash recovery, dial reconciliation and production acceptance. |
+| 9 | `orchestration`: call lifecycle | Core implemented: native Turn API, concurrent input/event collection, ordered response execution, eager/final invalidation, holds and finalization. Local eight-call/full-duplex and clock-isolation tests. Transfer/artifact hooks now installed. | Durable fact acknowledgement and live-call acceptance. |
+| 10 | `service`: HTTP service/session management | Implemented host: HTTP/WebSocket routes, auth, admission, dotenv/profile bootstrap, native Twilio REST/signatures and atomic memory/Redis records. Local browser/text/phone integration tests. | Long-call lease renewal/crash recovery, dial reconciliation and production acceptance. |
 | 11 | Transfers/escalation | Implemented: native REST, 80 XML comparisons, callback races and real Redis CAS. | Real telephone acceptance, crash recovery and durable report outbox. |
 | 12 | Recording/artifacts | Implemented: 162 exact WAV/timestamp/event comparisons; actual-send capture, local storage and AWS SDK S3. | Browser recording, crash recovery, retention and real S3 acceptance. |
-| 13 | Observability/deployment | Pending. | Operational metrics/logs, native capability checks, readiness, packaging and production shutdown/load acceptance. |
+| 13 | Observability/deployment | Implemented retries, fixed metrics, native probes, readiness, CI/deployment definitions; 207 native tests pass. | YAML dependency advisory; hosted CI/container verification; production shutdown/load and real-call acceptance. |
 
 Only implemented modules have crates. Future names are boundaries to implement,
 not empty placeholders counted as completed work. The application remains
@@ -140,7 +141,7 @@ deliver audio with correct ordering, pacing, marks and AEC references.
 - [x] Attach authenticated HTTP/WebSocket sockets through module 10's host and Sink.
 - [x] Connect module-8 line and judge decisions, protected machine breakthrough, replayed final events and quiet holds.
 - [x] Connect application events/front lifecycle to module 9.
-- [ ] Connect recording/event hooks to module 12.
+- [x] Connect recording/event hooks to module 12.
 - [ ] Run actual Twilio and browser microphone acceptance tests, including abrupt
   disconnect, overlapping speech, interrupted output and session cleanup.
 - [ ] Decide whether to port legacy gated STT, disabled-controller/window behavior
@@ -269,7 +270,7 @@ front responses, finalization and escalation decisions.
   per-call clock/counter isolation. Test application speculative reuse across the
   real Python HTTP seam with mocked agents.
 - [x] Install the module-10 host and validate real caller sockets through the driver.
-- [ ] Install actual transfer/recording hooks from modules 11/12.
+- [x] Install actual transfer/recording hooks from modules 11/12.
 - [ ] Add durable acknowledgement/replay for facts after ambiguous transaction
   failure and a unified positive sequence for synthesized delivery facts.
 - [ ] Complete latency/first-chunk analytics parity in module 13 and live-call/load acceptance.
@@ -309,7 +310,7 @@ resolve configuration and own session admission/persistence.
   admission and await active calls during shutdown; test process SIGTERM exit.
 - [x] Validate text/browser/phone calls on actual local sockets; use an isolated
   real Redis, all 49 lifecycle transitions, duplicate races and index expiry.
-- [ ] Replace explicit 501 transfer/artifact routes and `NoHooks` with modules 11/12.
+- [x] Replace explicit 501 transfer/artifact routes and `NoHooks` with modules 11/12.
 - [ ] Add long-call lease renewal/recovery, ambiguous dial reconciliation and
   production load/rolling-deployment acceptance with module 13.
 
@@ -366,25 +367,29 @@ for gaps, overlap, partial frames, clears and interrupted calls; test storage fa
 
 ## 13. Observability, development checks and deployment
 
-**Status:** Pending. Documentation and correctness runners exist; production
-instrumentation, packaging and enforced CI are not complete.
-The initial public repository adds a basic native build/test, scoped lint and
-Rustdoc workflow. Full parity CI, coverage/dependency policy and deployment
-acceptance remain outstanding; this does not complete module 13.
+**Status:** Core implemented; production acceptance remains incomplete.
+**Location:** `crates/resilience`, `crates/observability`, service operations,
+Dockerfile and `.github/workflows`. See [operations](OPERATIONS.md) and the
+[validation gate](validation/operations/README.md).
 **Responsibility:** Make the gateway diagnosable, reproducible and operable under load.
 **Python references:** [metrics](../voice-gateway/vogon/gateway/metrics),
 [capability checks](../voice-gateway/vogon/gateway_service/capabilities.py).
 
-- [ ] Port operational metrics and structured logs for provider, floor, playback,
-  AEC, session and application events without exposing credentials or unrestricted transcripts.
-- [ ] Implement health/readiness and startup checks for configured providers,
-  Python/NumPy/audioop, SpeexDSP, VAD and optional services.
-- [ ] Pin the toolchain and runtime dependencies; build a reproducible deployment
-  image with explicitly available native libraries, assets and required source inputs.
-- [ ] Enforce formatting, Clippy, documentation checks, native tests and parity
-  tests in CI; add dependency policy checks, coverage and focused fuzz/sanitizer jobs.
-- [ ] Verify process-wide shutdown across sessions, provider tasks, audio workers,
-  recorders and stores; define resource/admission limits using load-test evidence.
+- [x] Add fixed operational metrics for provider, floor, playback, scalar AEC,
+  session and application events, plus structured operational error logs.
+- [x] Implement native startup probes, writable recording-store checks and bounded
+  session-store readiness. Provider readiness checks credential presence only.
+- [x] Configure exponential retries for all network boundaries, with cancellation,
+  per-dependency overrides and explicit safety exceptions for non-replayable work.
+- [x] Define pinned toolchain/runtime inputs and a non-root deployment image.
+- [x] Add scoped formatting/Clippy, Rustdoc, native and pinned Python parity CI;
+  dependency policy, coverage and contract fuzzing with AddressSanitizer.
+- [x] Validate native shutdown/parallel admission and cancellation of transfer drain;
+  document phase budgets and current resource limits.
+- [ ] Resolve unmaintained YAML dependency advisory without suppressing the gate.
+- [ ] Complete the Docker build/smoke test and verify workflows on hosted CI.
+- [ ] Bound provider buffering and concurrent recording finalization; establish
+  production resource/admission limits with load and long-duration evidence.
 - [ ] Complete deployment smoke tests, real-call acceptance and a documented
   rollout/rollback procedure. Report any performance work separately from correctness.
 

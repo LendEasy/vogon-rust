@@ -18,6 +18,20 @@ pub struct Clients {
     pub judge: Option<judge::Client>,
 }
 impl Clients {
+    /// Apply one host-owned exponential budget to each network provider pool.
+    pub fn with_retry(mut self, policy: vogon_resilience::Policy) -> Self {
+        if let Some(c) = &mut self.jev {
+            c.http = c.http.clone().with_retry(policy.clone());
+        }
+        if let Some(c) = &mut self.front {
+            c.http = c.http.clone().with_retry(policy.clone());
+        }
+        if let Some(c) = &mut self.judge {
+            c.http = c.http.clone().with_retry(policy);
+        }
+        self
+    }
+
     /// Apply Python's configured-key, OPEN_ROUTER_API_KEY, OPENROUTER_API_KEY precedence.
     /// An injected lookup avoids global environment mutation in tests and concurrent calls.
     pub fn from_settings(settings: &Value, env: impl Fn(&str) -> Option<String>) -> Result<Self> {

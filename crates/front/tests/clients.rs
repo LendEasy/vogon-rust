@@ -428,3 +428,24 @@ async fn connection_failure_has_bounded_retries_and_sanitized_trace() {
     assert_eq!(traces.lock().unwrap()[0].attempts, 5);
     assert!(!err.to_string().contains(&endpoint));
 }
+
+#[tokio::test]
+async fn configured_exponential_retry_does_not_multiply_jev_outer_attempts() {
+    let mut reply = Reply::json(json!({}));
+    reply.status = 503;
+    let s = Server::start(vec![reply; 8]).await;
+    let mut client = s.jev();
+    client.http = client.http.with_retry(vogon_resilience::Policy {
+        attempts: 3,
+        initial_ms: 1,
+        max_ms: 2,
+        jitter: false,
+    });
+    assert!(
+        client
+            .decide(json!({}), questions(), None, "")
+            .await
+            .is_err()
+    );
+    assert_eq!(s.requests.lock().await.len(), 3);
+}

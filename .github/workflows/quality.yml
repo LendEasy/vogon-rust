@@ -1,0 +1,47 @@
+name: Dependency policy and extended checks
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: '17 6 * * 1'
+permissions:
+  contents: read
+jobs:
+  dependencies:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install 1.99.1 --profile minimal
+      - run: cargo install cargo-deny --version 0.20.2 --locked
+      - run: cargo deny check
+  coverage:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install 1.99.1 --profile minimal --component llvm-tools-preview
+      - run: cargo install cargo-llvm-cov --version 0.9.1 --locked
+      - name: Pure control and retry coverage
+        run: cargo llvm-cov -p vogon-contracts -p vogon-playback -p vogon-barge-in -p vogon-clocks -p vogon-resilience -p vogon-observability --lcov --output-path coverage.lcov
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.lcov
+  fuzz:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install nightly-2026-10-01 --profile minimal
+      - run: cargo +nightly-2026-10-01 install cargo-fuzz --version 0.13.2 --locked
+      - name: Contract boundary under AddressSanitizer
+        run: cargo +nightly-2026-10-01 fuzz run contracts -- -max_total_time=120 -max_len=65536
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: fuzz-failures
+          path: fuzz/artifacts/

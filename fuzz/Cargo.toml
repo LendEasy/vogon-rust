@@ -1,0 +1,20 @@
+[package]
+name = "vogon-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+license = "Apache-2.0"
+[package.metadata]
+cargo-fuzz = true
+[dependencies]
+libfuzzer-sys = "0.4"
+serde_json = "1"
+vogon-contracts = { path = "../crates/contracts" }
+[[bin]]
+name = "contracts"
+path = "fuzz_targets/contracts.rs"
+test = false
+doc = false
+bench = false
+[workspace]
+members = ["."]

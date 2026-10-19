@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   native:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:
       OPENBLAS_NUM_THREADS: "1"
@@ -36,9 +36,9 @@ jobs:
       - name: Native tests (no external provider calls)
         run: cargo test --locked --workspace -- --skip live_
       - name: Format maintained service and orchestration crates
-        run: cargo fmt -p vogon-service -p vogon-orchestration -p vogon-clocks -p vogon-transport -p vogon-front -p vogon-echo-turn-service -- --check
+        run: cargo fmt -p vogon-service -p vogon-orchestration -p vogon-clocks -p vogon-transport -p vogon-front -p vogon-echo-turn-service -p vogon-artifacts -p vogon-escalation -p vogon-resilience -p vogon-observability -p vogon-speech-providers -- --check
       - name: Scoped Clippy
-        run: cargo clippy --locked -p vogon-service -p vogon-orchestration -p vogon-clocks -p vogon-echo-turn-service --all-targets --no-deps -- -D warnings
+        run: cargo clippy --locked -p vogon-service -p vogon-orchestration -p vogon-clocks -p vogon-echo-turn-service -p vogon-artifacts -p vogon-escalation -p vogon-resilience -p vogon-observability -p vogon-speech-providers -p vogon-front -p vogon-transport --all-targets --no-deps -- -D warnings
       - name: Rustdoc links
         env:
           RUSTDOCFLAGS: "-D rustdoc::broken_intra_doc_links"

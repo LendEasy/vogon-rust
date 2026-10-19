@@ -1,7 +1,7 @@
 # Known issues and acceptance limits
 
-Modules 1–10 have implemented cores. This initial public import preserves their
-current behavior; it does not close the remaining migration work.
+Modules 1–13 have implemented cores. Local tests do not close production acceptance
+or the live-call findings deferred during modules 11–13.
 
 - Browser playback completion is not fully connected to silence-ladder timers.
   Phone timer and parallel-call isolation checks pass.
@@ -15,9 +15,19 @@ current behavior; it does not close the remaining migration work.
   up to four live-provider calls, not production capacity or long-duration leaks.
 - Durable Turn API fact acknowledgement, long-call lease renewal, crash recovery
   and ambiguous outbound dial reconciliation remain incomplete.
-- Transfers (module 11), recording/artifacts (12), production observability,
-  packaging and operational acceptance (13) remain pending. Unsupported transfer
-  and artifact routes return 501.
+- Transfers and phone recording/artifacts are wired, with local protocol and
+  Python parity tests. Real telephone transfer acceptance and real AWS permission/
+  deployment checks remain. Missing artifacts return 404; implemented routes no
+  longer use the former 501 placeholders.
+- The dependency policy fails on RUSTSEC-2024-0449: unmaintained `unsafe-libyaml`,
+  pulled in by the existing `serde_yaml_ng` front configuration parser. No ignore
+  is configured; dependency replacement/review is a deferred release requirement.
+- The deployment image and GitHub workflows are added but have not completed
+  container/hosted CI acceptance. The local Docker build stopped when extracting
+  the builder image exhausted root-disk space.
+- Recording retention is bounded, but sparse four-hour timelines can expand to
+  roughly 460 MB per WAV. Concurrent blocking finalizers have no separate semaphore;
+  production memory sizing and finalizer concurrency limits remain outstanding.
 - GPT Live acceptance is deferred. Legacy gated STT and alternate phone playback
   modes are not accepted by the default snapshot adapter.
 - Native audio builds currently support Linux without cross compilation.

@@ -6,8 +6,7 @@ and speculative model work. The [module-10 HTTP/WebSocket host](../service/READM
 now supplies bounded caller input and the actual socket `Sink`; driver-level
 tests can also inject these interfaces directly.
 
-Dashed boxes in the lifecycle diagrams identify pending integrations. A solid
-box describes existing code or an existing external service. Diagrams show
+Boxes describe existing code or an existing external service. Diagrams show
 logical tasks and interfaces, not one operating-system thread per box.
 
 ## Entry points and startup
@@ -24,7 +23,7 @@ flowchart TD
     Start --> Result{"Valid StartCall response?"}
     Result -->|No| Failed["Return start_failed Report; no transport or EndCall"]
     Result -->|Yes| Configure["Hooks::configure(CallConfig)"]
-    Configure -.-> Recording["Actual recording setup - pending module 12"]
+    Configure --> Recording["Call-local recording policy - module 12"]
     Configure --> Open["SessionFactory::open(CallConfig, Clock)"]
     Sink --> Open
     Open --> Session["Session + Engine + CallClocks + Writer"]
@@ -34,7 +33,6 @@ flowchart TD
     Opening --> Active["Run event collector concurrently with input and output"]
     Configure -->|Failure| Cleanup["Finalize the already-started call"]
     Open -->|Failure| Cleanup
-    style Recording stroke-dasharray: 5 5
 ```
 
 `Driver` receives an already-constructed `TurnApi`, `Factory`, `Hooks`, `Clock`
@@ -51,7 +49,7 @@ dispatched, although collection and invalidation already run concurrently.
 | Transport construction | `Factory::open(...) -> Opened` | Return a `Port`, transport event receiver and optional front `Source`. |
 | Caller output | `Sink::send(Frame)` through the serial `Writer` | Send media, marks, clear and client control frames. Send acceptance is not a playback receipt. |
 | Application boundary | `TurnApi::{start, process, end}` | Native HTTP client for StartCall, ProcessEvents and EndCall. |
-| Integration hooks | `Hooks::{configure, escalate, finish}` | Host saves the resolved snapshot in configure; recording setup, transfers and artifact completion remain pending. `NoHooks` does not implement these services or report a successful transfer. |
+| Integration hooks | `Hooks::{configure, prepare_escalation, escalate, finish}` | Host saves the snapshot and recording policy, prepares native transfer state before handoff speech, executes transfer after playout, and finalizes recording/artifacts. `NoHooks` remains a test/embedding option. |
 | Call exit | Returned `Report` | Report reason, errors, terminal acknowledgement and call-local counters to the host. |
 
 Source: [driver](src/driver.rs), [ports and factory](src/port.rs),
@@ -522,9 +520,8 @@ flowchart TD
     Facts --> EndCall
     EndCall --> Frame["Send server.call_ended if transport exists"]
     Frame --> Finish["Await Hooks::finish with a time limit"]
-    Finish -.-> Artifacts["Actual recording/upload finalization - pending module 12"]
+    Finish --> Artifacts["Recording finalization: local atomic write + AWS SDK S3"]
     Finish --> Report["Return Report to host"]
-    style Artifacts stroke-dasharray: 5 5
 ```
 
 EndCall is attempted once by the driver after a valid StartCall; the HTTP client
@@ -536,7 +533,7 @@ without EndCall or artifact hooks.
 | Wait | Default boundary |
 |---|---|
 | Terminal playout | Configurable eight-second cap; ordinary stale response is rechecked afterward. |
-| Escalation handoff playout | Eight-second cap before invoking `Hooks::escalate`. Actual transfer implementation remains module 11 work. |
+| Escalation handoff playout | Eight-second cap before invoking `Hooks::escalate`; module 11 owns the native transfer and asynchronous callback state. |
 | Active escalation during teardown | Up to 60 seconds before abort/join. |
 | EndCall | 90-second outer timeout, with the HTTP client's terminal retry policy inside it. |
 | Artifact hook | 30-second timeout. |

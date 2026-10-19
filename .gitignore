@@ -21,3 +21,8 @@
 
 # Local recordings and runtime artifacts, including test working directories.
 **/storage/
+
+/fuzz/target/
+/fuzz/artifacts/
+/fuzz/corpus/
+/coverage.lcov

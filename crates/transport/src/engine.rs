@@ -269,20 +269,18 @@ impl Engine {
         self.clocks.caller_activity();
         let mut generation = generation;
         if let Some(f) = &mut self.floor {
-            if final_event {
-                if let Some(ep) = episode.and_then(|id| f.get_episode(id)) {
-                    if episode == f.current && ep.r#final {
-                        generation = Some(f.generation);
-                    }
-                    if f.caller_floor || ep.deferred {
-                        f.transport.absorbing_utterance = false;
-                        f.transport.absorb_detail = None;
-                    } else if ep.decision == Decision::Uncertain && f.active_playback() {
-                        f.transport.absorbing_utterance = true;
-                        f.transport.absorb_detail = Some(
-                            json!({"text":text,"verdict":"timeout_absorb","source":"floor_controller","audio_id":f.transport.last_audio_id}),
-                        );
-                    }
+            if final_event && let Some(ep) = episode.and_then(|id| f.get_episode(id)) {
+                if episode == f.current && ep.r#final {
+                    generation = Some(f.generation);
+                }
+                if f.caller_floor || ep.deferred {
+                    f.transport.absorbing_utterance = false;
+                    f.transport.absorb_detail = None;
+                } else if ep.decision == Decision::Uncertain && f.active_playback() {
+                    f.transport.absorbing_utterance = true;
+                    f.transport.absorb_detail = Some(
+                        json!({"text":text,"verdict":"timeout_absorb","source":"floor_controller","audio_id":f.transport.last_audio_id}),
+                    );
                 }
             }
             if f.transport.absorbing_utterance {

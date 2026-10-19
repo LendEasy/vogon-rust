@@ -29,9 +29,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::load(&path)?;
     let store: SharedStore = if config.gateway["session_store"] == "redis" {
         Arc::new(
-            Redis::connect(
+            Redis::connect_with_retry(
                 config.settings["redis_url"].as_str().unwrap(),
                 Ttl::default(),
+                config.retries.redis.clone(),
             )
             .await?,
         )
@@ -40,10 +41,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     };
     let address = config.bind.clone();
     let service = Service::new(config, store)?;
+    let capabilities = service.startup().await?;
+    eprintln!(
+        "{}",
+        serde_json::json!({"event":"gateway_capabilities","capabilities":capabilities})
+    );
     if args.iter().any(|s| s == "--check") {
-        println!(
-            "gateway configuration and session store ready; native capability acceptance remains module 13"
-        );
+        println!("{}", service.readiness("text").await);
         return Ok(());
     }
     let listener = tokio::net::TcpListener::bind(&address).await?;

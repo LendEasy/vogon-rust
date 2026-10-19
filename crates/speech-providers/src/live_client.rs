@@ -156,7 +156,7 @@ impl LiveClient {
                 let code = open_error.unwrap_or("live_closed_before_ready");
                 let _ = tx.send(Err(Error::new(code)));
                 let _ = events.send(SttOutput::Error {
-                    error: Error::new(&code),
+                    error: Error::new(code),
                 });
             }
             let _ = events.send(SttOutput::Closed {

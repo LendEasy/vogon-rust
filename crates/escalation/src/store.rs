@@ -9,6 +9,7 @@ type Entries = HashMap<String, (Vec<u8>, Instant)>;
 #[derive(Clone)]
 pub struct Store {
     backend: Arc<Backend>,
+    retry: vogon_resilience::Policy,
 }
 enum Backend {
     Memory(Mutex<Entries>),
@@ -17,6 +18,7 @@ enum Backend {
 impl Default for Store {
     fn default() -> Self {
         Self {
+            retry: vogon_resilience::Policy::once(),
             backend: Arc::new(Backend::Memory(Mutex::new(HashMap::new()))),
         }
     }
@@ -25,13 +27,27 @@ impl Store {
     /// Validate Redis configuration; operations connect asynchronously and are bounded.
     pub fn redis(url: &str) -> Result<Self> {
         Ok(Self {
+            retry: vogon_resilience::Policy::once(),
             backend: Arc::new(Backend::Redis(
                 redis::Client::open(url).map_err(|_| Error("invalid_transfer_redis"))?,
             )),
         })
     }
+    /// Set retries for safe reads and connection establishment, never replay ambiguous CAS writes.
+    pub fn with_retry(mut self, retry: vogon_resilience::Policy) -> Self {
+        self.retry = retry;
+        self
+    }
     /// Read a value without extending its expiration.
     pub async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+        self.retry
+            .run(
+                || self.get_once(key),
+                |e| matches!(e.0, "transfer_store_timeout" | "transfer_store_unavailable"),
+            )
+            .await
+    }
+    async fn get_once(&self, key: &str) -> Result<Option<Vec<u8>>> {
         match self.backend.as_ref() {
             Backend::Memory(m) => {
                 let mut m = m.lock().await;
@@ -44,7 +60,13 @@ impl Store {
             })
             .await
             .map_err(|_| Error("transfer_store_timeout"))?
-            .map_err(|_| Error("transfer_store_unavailable")),
+            .map_err(|e: redis::RedisError| {
+                Error(if e.is_io_error() || e.is_timeout() {
+                    "transfer_store_unavailable"
+                } else {
+                    "transfer_store_rejected"
+                })
+            }),
         }
     }
     /// Atomically create/replace/delete only the version read by the caller.
@@ -72,7 +94,13 @@ impl Store {
             Backend::Redis(c) => {
                 let script = "local v=redis.call('get',KEYS[1]); if ARGV[1]=='0' then if v then return 0 end elseif v~=ARGV[2] then return 0 end; if ARGV[3]=='0' then redis.call('del',KEYS[1]) else redis.call('set',KEYS[1],ARGV[4],'PX',ARGV[5]) end; return 1";
                 let value: i64 = tokio::time::timeout(Duration::from_secs(5), async {
-                    let mut conn = c.get_multiplexed_async_connection().await?;
+                    let mut conn = self
+                        .retry
+                        .run(
+                            || c.get_multiplexed_async_connection(),
+                            |e| e.is_io_error() || e.is_timeout(),
+                        )
+                        .await?;
                     redis::cmd("EVAL")
                         .arg(script)
                         .arg(1)

@@ -241,17 +241,37 @@ impl Store for Memory {
 pub struct Redis {
     connection: redis::aio::ConnectionManager,
     ttl: Ttl,
+    retry: vogon_resilience::Policy,
 }
 impl Redis {
     /// Connect without logging URLs or passwords. Cluster mode is rejected by bootstrap.
     pub async fn connect(url: &str, ttl: Ttl) -> Result<Self> {
+        Self::connect_with_retry(url, ttl, vogon_resilience::Policy::default()).await
+    }
+    /// Configure reconnect backoff; mutating Lua commands are never blindly replayed.
+    pub async fn connect_with_retry(
+        url: &str,
+        ttl: Ttl,
+        retry: vogon_resilience::Policy,
+    ) -> Result<Self> {
         let client = redis::Client::open(url).map_err(|_| Error::new("invalid_redis_url"))?;
-        let connection =
-            tokio::time::timeout(Duration::from_secs(5), client.get_connection_manager())
-                .await
-                .map_err(|_| Error::new("redis_timeout"))?
-                .map_err(|_| Error::new("redis_unavailable"))?;
-        Ok(Self { connection, ttl })
+        let config = redis::aio::ConnectionManagerConfig::new()
+            .set_number_of_retries(retry.attempts.saturating_sub(1))
+            .set_exponent_base(2)
+            .set_factor(retry.initial_ms)
+            .set_max_delay(retry.max_ms);
+        let connection = tokio::time::timeout(
+            Duration::from_secs(15),
+            client.get_connection_manager_with_config(config),
+        )
+        .await
+        .map_err(|_| Error::new("redis_timeout"))?
+        .map_err(|_| Error::new("redis_unavailable"))?;
+        Ok(Self {
+            connection,
+            ttl,
+            retry,
+        })
     }
     fn key(k: &Key) -> String {
         format!("gw:{}:call:{}", k.0, k.1)
@@ -260,6 +280,14 @@ impl Redis {
         format!("gw:idx:{}:{id}", if provider { "sid" } else { "token" })
     }
     async fn raw(&self, key: &str) -> Result<Option<String>> {
+        self.retry
+            .run(
+                || self.raw_once(key),
+                |e| matches!(e.0.as_str(), "redis_timeout" | "redis_unavailable"),
+            )
+            .await
+    }
+    async fn raw_once(&self, key: &str) -> Result<Option<String>> {
         tokio::time::timeout(
             Duration::from_secs(5),
             redis::cmd("GET")
@@ -268,7 +296,13 @@ impl Redis {
         )
         .await
         .map_err(|_| Error::new("redis_timeout"))?
-        .map_err(|_| Error::new("redis_unavailable"))
+        .map_err(|e: redis::RedisError| {
+            Error::new(if e.is_io_error() || e.is_timeout() {
+                "redis_unavailable"
+            } else {
+                "redis_rejected"
+            })
+        })
     }
     async fn script(&self, script: &str, keys: Vec<String>, args: Vec<String>) -> Result<i64> {
         let mut c = redis::cmd("EVAL");

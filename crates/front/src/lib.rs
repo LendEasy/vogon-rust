@@ -38,7 +38,7 @@ impl Error {
             Some(s) => [408, 409, 425, 429, 500, 502, 503, 504].contains(&s),
             None => matches!(
                 self.code.as_str(),
-                "provider_timeout" | "provider_connect_failed"
+                "provider_timeout" | "provider_connect_failed" | "provider_request_failed"
             ),
         }
     }

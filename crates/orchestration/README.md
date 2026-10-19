@@ -3,8 +3,9 @@
 `Driver::run` owns one call from StartCall through transport shutdown and
 EndCall. It composes the existing modules; application reasoning and speculative
 model execution remain behind the Python Turn API. The [module-10 host](../service/README.md)
-now supplies real HTTP/WebSocket entry points; transfer/recording hooks remain
-modules 11/12.
+now supplies real HTTP/WebSocket entry points and installs the native transfer
+and recording hooks from modules 11/12. Dependency retry policies, metrics and
+deployment limits are described in [operations](../../OPERATIONS.md).
 
 For the implemented entry/exit interfaces, Tokio task graph, eager/final sequence,
 clock ownership and shutdown flow, see [the illustrated call-flow guide](CALL_FLOW.md).

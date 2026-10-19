@@ -203,3 +203,22 @@ fn binding_precedence_full_root_and_empty_retry_schedule() {
         5
     );
 }
+
+#[tokio::test]
+async fn configured_backoff_retries_throttle_with_identical_replay_identity() {
+    for status in [408, 429, 503] {
+        let mut error = Reply::json(json!({}));
+        error.status = status;
+        let s = Server::start(vec![error.clone(), error, Reply::json(json!({}))]).await;
+        let c = client(&s).with_retry(vogon_resilience::Policy {
+            attempts: 3,
+            initial_ms: 1,
+            max_ms: 2,
+            jitter: false,
+        });
+        c.process(req()).await.unwrap();
+        let seen = s.requests.lock().await;
+        assert_eq!(seen.len(), 3);
+        assert!(seen.iter().all(|r| r.1 == seen[0].1));
+    }
+}

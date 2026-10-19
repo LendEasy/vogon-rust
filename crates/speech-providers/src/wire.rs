@@ -54,7 +54,33 @@ impl Drop for Socket {
         self.task.abort();
     }
 }
+/// Only handshake/network failures are replayable; active audio packets are never retried.
+pub fn retryable(error: &Error) -> bool {
+    matches!(
+        error.code.as_str(),
+        "provider_connect_failed"
+            | "provider_connect_timeout"
+            | "provider_http_408"
+            | "provider_http_429"
+    ) || error
+        .code
+        .strip_prefix("provider_http_")
+        .and_then(|s| s.parse::<u16>().ok())
+        .is_some_and(|n| n >= 500)
+}
 impl Socket {
+    /// Retry connection establishment before any audio is sent; caller cancellation stops backoff.
+    pub async fn connect_retry(
+        endpoint: &str,
+        query: &[(String, String)],
+        key: &ApiKey,
+        policy: &vogon_resilience::Policy,
+    ) -> Result<Self> {
+        policy
+            .run(|| Self::connect(endpoint, query, key), retryable)
+            .await
+    }
+
     /// Authenticated connection, with query encoding and repeated keys handled by URL.
     pub async fn connect(endpoint: &str, query: &[(String, String)], key: &ApiKey) -> Result<Self> {
         Self::connect_with_auth(endpoint, query, key, false).await

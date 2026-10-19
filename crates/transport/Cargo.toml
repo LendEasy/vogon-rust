@@ -7,6 +7,7 @@ license = "Apache-2.0"
 repository = "https://github.com/LendEasy/vogon-rust"
 
 [dependencies]
+vogon-resilience = { path = "../resilience" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }

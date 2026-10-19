@@ -228,7 +228,12 @@ impl Client {
         };
         let body = json!({"model":self.model,"state":state,"questions":questions});
         let timeout = Duration::from_millis(timeout_ms.unwrap_or(self.timeout_ms));
-        for (attempt, backoff) in BACKOFF_MS
+        let backoffs = if self.http.retry_configured() {
+            vec![]
+        } else {
+            BACKOFF_MS.to_vec()
+        };
+        for (attempt, backoff) in backoffs
             .into_iter()
             .map(Some)
             .chain(std::iter::once(None))

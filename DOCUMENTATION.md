@@ -21,7 +21,10 @@ This is not a claim that every private helper or generated field is documented.
 The crate READMEs identify scope, dependencies and validation. The architecture
 guide explains composition across crates. The [service guide](crates/service/README.md)
 documents module 10, its source/type responsibilities, ASCII lifecycle diagrams,
-configuration and compatibility decisions. Modules 11–13 remain in the checklist.
+configuration and compatibility decisions. The [transfer](crates/escalation/README.md)
+and [artifact](crates/artifacts/README.md) guides describe modules 11–12.
+[OPERATIONS.md](OPERATIONS.md) covers module 13, dependency retries, native
+readiness, metrics, shutdown, packaging and outstanding deployment acceptance.
 
 ## Build browsable API documentation
 
@@ -33,7 +36,8 @@ cargo doc --offline --locked --no-deps --document-private-items \
   -p vogon-audio-core -p vogon-audio-runtime \
   -p vogon-contracts -p vogon-configuration \
   -p vogon-playback -p vogon-barge-in -p vogon-clocks \
-  -p vogon-speech-providers -p vogon-transport -p vogon-front -p vogon-orchestration -p vogon-service
+  -p vogon-speech-providers -p vogon-transport -p vogon-front -p vogon-orchestration -p vogon-service \
+  -p vogon-escalation -p vogon-artifacts -p vogon-resilience -p vogon-observability
 ```
 
 Open `target/doc/vogon_transport/index.html` and use the crate navigation.

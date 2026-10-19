@@ -31,6 +31,9 @@ use vogon_transport::{
 /// Shared immutable dependencies and bounded process-wide ownership registry.
 pub struct Service {
     pub config: Config,
+    pub metrics: Arc<vogon_observability::Metrics>,
+    pub(crate) native_checks: tokio::sync::OnceCell<Value>,
+    pub(crate) artifact_ready: std::sync::atomic::AtomicBool,
     pub store: SharedStore,
     pub http: reqwest::Client,
     pub clients: vogon_front::bootstrap::Clients,
@@ -50,12 +53,14 @@ impl Service {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let http = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
+            .retry(reqwest::retry::never())
             .build()
             .map_err(|_| Error::new("http_client_failed"))?;
         let clients = vogon_front::bootstrap::Clients::from_settings(&config.settings, |key| {
             (key == "OPENROUTER_API_KEY").then(|| config.openrouter_fallback.clone())
         })
-        .map_err(|_| Error::new("invalid_front_clients"))?;
+        .map_err(|_| Error::new("invalid_front_clients"))?
+        .with_retry(config.retries.front.clone());
         let path = config.settings["front_config_path"].as_str().unwrap_or("");
         let artifact = if path.is_empty() {
             None
@@ -70,12 +75,16 @@ impl Service {
         let transfer_store = if config.gateway["session_store"] == "redis" {
             vogon_escalation::Store::redis(config.settings["redis_url"].as_str().unwrap_or(""))
                 .map_err(|e| Error::new(e.0))?
+                .with_retry(config.retries.redis.clone())
         } else {
             vogon_escalation::Store::default()
         };
         let setting = |name: &str| config.settings[name].as_str().unwrap_or("").to_owned();
         let transfers = vogon_escalation::Manager::new(
             vogon_escalation::Config {
+                report_retry: Some(config.retries.report.clone()),
+                rest_retry: config.retries.twilio.clone(),
+                tts_retry: config.retries.tts.clone(),
                 endpoint: config.twilio_endpoint.clone(),
                 account: setting("twilio_account_sid"),
                 token: setting("twilio_auth_token"),
@@ -108,6 +117,9 @@ impl Service {
             config.s3.clone(),
         );
         Ok(Arc::new(Self {
+            metrics: Arc::new(vogon_observability::Metrics::default()),
+            native_checks: tokio::sync::OnceCell::new(),
+            artifact_ready: std::sync::atomic::AtomicBool::new(false),
             recordings,
             calls: Arc::new(Semaphore::new(config.max_active)),
             handshakes: Arc::new(Semaphore::new(config.max_handshakes)),
@@ -194,8 +206,30 @@ impl Service {
         if vogon_configuration::auth_enabled(&self.config.gateway) {
             req = req.bearer_auth(self.config.gateway["service_key"].as_str().unwrap());
         }
-        if req.send().await.is_err() {
-            eprintln!("status_relay_failed");
+        let result = self
+            .config
+            .retries
+            .report
+            .run(
+                || async {
+                    let response = req
+                        .try_clone()
+                        .ok_or(false)?
+                        .send()
+                        .await
+                        .map_err(|_| true)?;
+                    if response.status().is_success() {
+                        Ok(())
+                    } else {
+                        Err(response.status().is_server_error()
+                            || response.status().as_u16() == 429)
+                    }
+                },
+                |transient| *transient,
+            )
+            .await;
+        if result.is_err() {
+            eprintln!("{{\"event\":\"status_relay_failed\"}}");
         }
     }
     /// Resolve a capability/provider identity, claim it once, then run the native driver.
@@ -230,6 +264,8 @@ impl Service {
             }
         };
         let Ok(_capacity) = self.calls.clone().try_acquire_owned() else {
+            self.metrics
+                .increment(vogon_observability::Event::AdmissionRejected);
             close(&mut socket, 1013).await;
             return;
         };
@@ -242,10 +278,16 @@ impl Service {
             }
         }
         lease.handshake.take();
+        self.metrics
+            .increment(vogon_observability::Event::CallStarted);
         let result = self.run(socket, &record, initial, shutdown).await;
         let terminal = if result.is_ok() {
+            self.metrics
+                .increment(vogon_observability::Event::CallEnded);
             State::Ended
         } else {
+            self.metrics
+                .increment(vogon_observability::Event::CallFailed);
             State::Failed
         };
         match self
@@ -350,15 +392,16 @@ impl Service {
             // Wall time belongs only to persisted records and client wire `ts`.
             // Subtracting utc_now here corrupts Turn API events into negative epochs.
             0.0,
-        )?)?);
+        )?)?.with_retry(self.config.retries.turn.clone()).with_metrics(self.metrics.clone()));
         let (outbound, mut inbound) = socket.split();
         let clock = Clock::default();
-        let capture = crate::recording::Capture::new(
+        let capture = crate::recording::Capture::with_metrics(
             self.recordings.clone(),
             record.tenant.clone(),
             record.call_id.clone(),
             clock.clone(),
             mode == Mode::Twilio,
+            self.metrics.clone(),
         );
         let factory = SessionFactory {
             settings: self.config.settings.clone(),

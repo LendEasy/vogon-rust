@@ -7,6 +7,10 @@ license = "Apache-2.0"
 repository = "https://github.com/LendEasy/vogon-rust"
 
 [dependencies]
+vogon-observability = { path = "../observability" }
+vogon-audio-core = { path = "../audio-core" }
+pyo3 = { version = "=0.30.1", features = ["auto-initialize"] }
+vogon-resilience = { path = "../resilience" }
 axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time", "signal", "fs"] }
 redis = { version = "0.32", features = ["tokio-comp", "connection-manager"] }

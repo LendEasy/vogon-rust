@@ -28,6 +28,9 @@ pub struct Config {
     pub tts_key: String,
     pub timeout: Duration,
     pub retry_delays: Vec<Duration>,
+    pub report_retry: Option<vogon_resilience::Policy>,
+    pub rest_retry: vogon_resilience::Policy,
+    pub tts_retry: vogon_resilience::Policy,
 }
 /// One transfer's authenticated application destination and physical caller identity.
 #[derive(Clone, Serialize, Deserialize)]
@@ -115,11 +118,19 @@ impl Manager {
     /// Await pending reports/renders; callers impose the process shutdown deadline.
     pub async fn drain(&self) {
         loop {
-            let tasks = std::mem::take(&mut *self.tasks.lock().unwrap());
-            if tasks.is_empty() {
+            struct Owned(Vec<JoinHandle<()>>);
+            impl Drop for Owned {
+                fn drop(&mut self) {
+                    for task in &self.0 {
+                        task.abort();
+                    }
+                }
+            }
+            let mut tasks = Owned(std::mem::take(&mut *self.tasks.lock().unwrap()));
+            if tasks.0.is_empty() {
                 break;
             }
-            for t in tasks {
+            for t in &mut tasks.0 {
                 let _ = t.await;
             }
         }
@@ -184,7 +195,9 @@ impl Manager {
         let this = self.clone();
         self.spawn(async move {
             let body=json!({"call_id":binding.call_id,"request_id":uuid::Uuid::new_v4().simple().to_string(),"events":[fact]});
-            for delay in std::iter::once(Duration::ZERO).chain(this.config.retry_delays.iter().copied()) {
+            let attempts=this.config.report_retry.as_ref().map_or(this.config.retry_delays.len()+1,|p|p.attempts);
+            for attempt in 0..attempts {
+                let delay=if attempt==0{Duration::ZERO}else{this.config.report_retry.as_ref().map_or_else(||this.config.retry_delays[attempt-1],|p|p.delay(attempt-1))};
                 tokio::time::sleep(delay).await;
                 let response=this.http.post(format!("{}/record_transfer",binding.report_url.trim_end_matches('/'))).bearer_auth(&binding.report_token).json(&body).timeout(Duration::from_secs(5)).send().await;
                 if let Ok(r)=response {
@@ -198,6 +211,15 @@ impl Manager {
     }
     /// Bounded native REST call. Never retries an ambiguous dial automatically.
     async fn rest(&self, sid: Option<&str>, form: Vec<(&str, String)>) -> Result<Value> {
+        self.config
+            .rest_retry
+            .run(
+                || self.rest_once(sid, form.clone()),
+                |e| e.0 == "transfer_rest_throttled",
+            )
+            .await
+    }
+    async fn rest_once(&self, sid: Option<&str>, form: Vec<(&str, String)>) -> Result<Value> {
         if self.config.account.is_empty()
             || self.config.token.is_empty()
             || self.config.from.is_empty()
@@ -218,6 +240,9 @@ impl Manager {
             .send()
             .await
             .map_err(|_| Error("transfer_rest_ambiguous"))?;
+        if response.status().as_u16() == 429 {
+            return Err(Error("transfer_rest_throttled"));
+        }
         if !response.status().is_success() {
             return Err(Error(if response.status().is_server_error() {
                 "transfer_rest_ambiguous"
@@ -772,41 +797,54 @@ impl Manager {
             let sid = s.binding.caller_sid.clone();
             let voice = voice.clone();
             self.spawn(async move {
-                let mut rendered: Result<Vec<u8>> = async {
-                    if text.trim().is_empty() || voice.is_empty() || this.config.tts_key.is_empty()
-                    {
-                        return Err(Error("voice_unavailable"));
-                    }
-                    let mut response = this
-                        .http
-                        .post(&this.config.tts_endpoint)
-                        .query(&[("model", voice.as_str()), ("encoding", "mp3")])
-                        .header("Authorization", format!("Token {}", this.config.tts_key))
-                        .json(&json!({"text":text}))
-                        .timeout(Duration::from_secs(30))
-                        .send()
-                        .await
-                        .map_err(|_| Error("voice_render_failed"))?;
-                    if !response.status().is_success() {
-                        return Err(Error("voice_render_failed"));
-                    }
-                    let mut bytes = Vec::new();
-                    while let Some(chunk) = response
-                        .chunk()
-                        .await
-                        .map_err(|_| Error("voice_render_failed"))?
-                    {
-                        if bytes.len() + chunk.len() > 8 * 1024 * 1024 {
-                            return Err(Error("invalid_voice_audio"));
-                        }
-                        bytes.extend_from_slice(&chunk);
-                    }
-                    if bytes.is_empty() {
-                        return Err(Error("invalid_voice_audio"));
-                    }
-                    Ok(bytes)
-                }
-                .await;
+                let mut rendered: Result<Vec<u8>> = this
+                    .config
+                    .tts_retry
+                    .run(
+                        || async {
+                            if text.trim().is_empty()
+                                || voice.is_empty()
+                                || this.config.tts_key.is_empty()
+                            {
+                                return Err(Error("voice_unavailable"));
+                            }
+                            let mut response = this
+                                .http
+                                .post(&this.config.tts_endpoint)
+                                .query(&[("model", voice.as_str()), ("encoding", "mp3")])
+                                .header("Authorization", format!("Token {}", this.config.tts_key))
+                                .json(&json!({"text":text}))
+                                .timeout(Duration::from_secs(30))
+                                .send()
+                                .await
+                                .map_err(|_| Error("voice_render_failed"))?;
+                            if response.status().as_u16() == 429
+                                || response.status().is_server_error()
+                            {
+                                return Err(Error("voice_render_failed"));
+                            }
+                            if !response.status().is_success() {
+                                return Err(Error("voice_render_rejected"));
+                            }
+                            let mut bytes = Vec::new();
+                            while let Some(chunk) = response
+                                .chunk()
+                                .await
+                                .map_err(|_| Error("voice_render_failed"))?
+                            {
+                                if bytes.len() + chunk.len() > 8 * 1024 * 1024 {
+                                    return Err(Error("invalid_voice_audio"));
+                                }
+                                bytes.extend_from_slice(&chunk);
+                            }
+                            if bytes.is_empty() {
+                                return Err(Error("invalid_voice_audio"));
+                            }
+                            Ok(bytes)
+                        },
+                        |e| e.0 == "voice_render_failed",
+                    )
+                    .await;
                 let token = uuid::Uuid::new_v4().simple().to_string();
                 let key = format!("gw:rust:esc:audio:{token}");
                 if let Ok(bytes) = &rendered

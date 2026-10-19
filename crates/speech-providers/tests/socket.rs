@@ -444,6 +444,8 @@ async fn live_start_timeout_is_reported_after_background_return() {
     server.await.unwrap();
 }
 
+// Tungstenite fixes this callback error type to its HTTP response.
+#[allow(clippy::result_large_err)]
 #[tokio::test]
 async fn flux_connection_preserves_eager_clamp_repeated_keyterms_and_auth() {
     let (listener, url) = listen().await;
@@ -545,4 +547,69 @@ async fn provider_sequence_replay_is_call_local_and_later_identical_turn_is_pres
         server.await.unwrap();
     }
     tokio::join!(call(), call());
+}
+
+#[tokio::test]
+async fn configured_handshake_retries_transient_status_without_sending_audio_twice() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let (listener, url) = listen().await;
+    let server = tokio::spawn(async move {
+        for _ in 0..2 {
+            let (mut tcp, _) = listener.accept().await.unwrap();
+            let mut request = [0; 4096];
+            assert!(tcp.read(&mut request).await.unwrap() > 0);
+            tcp.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
+        }
+        let mut ws = accept_async(listener.accept().await.unwrap().0)
+            .await
+            .unwrap();
+        assert_eq!(
+            ws.next().await.unwrap().unwrap(),
+            Message::Binary(vec![1, 2, 3].into())
+        );
+        ws.close(None).await.unwrap();
+    });
+    let p = vogon_resilience::Policy {
+        attempts: 3,
+        initial_ms: 1,
+        max_ms: 2,
+        jitter: false,
+    };
+    let (mut client, _) =
+        SttClient::connect_with_retry(&url, SttConfig::default(), key(), Clock::default(), p)
+            .await
+            .unwrap();
+    client.input.send_audio(vec![1, 2, 3]).await.unwrap();
+    server.await.unwrap();
+    client.close().await;
+}
+#[tokio::test]
+async fn configured_handshake_does_not_retry_auth_failure() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let (listener, url) = listen().await;
+    let server = tokio::spawn(async move {
+        let (mut tcp, _) = listener.accept().await.unwrap();
+        let mut request = [0; 4096];
+        assert!(tcp.read(&mut request).await.unwrap() > 0);
+        tcp.write_all(
+            b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        )
+        .await
+        .unwrap();
+        assert!(
+            timeout(Duration::from_millis(100), listener.accept())
+                .await
+                .is_err()
+        );
+    });
+    let result = SttClient::connect_with_retry(
+        &url,
+        SttConfig::default(),
+        key(),
+        Clock::default(),
+        vogon_resilience::Policy::default(),
+    )
+    .await;
+    assert!(matches!(result,Err(e) if e.code=="provider_http_401"));
+    server.await.unwrap();
 }

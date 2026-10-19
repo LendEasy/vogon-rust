@@ -23,6 +23,8 @@ pub struct Config {
     pub twilio_endpoint: String,
     /// Native S3 settings; optional credentials may come from the same dotenv.
     pub s3: Option<vogon_artifacts::store::S3Config>,
+    /// Validated exponential retry budgets for every network dependency.
+    pub retries: vogon_resilience::Policies,
 }
 impl Config {
     /// Load a shared dotenv file. Explicit process values override file values.
@@ -43,7 +45,7 @@ impl Config {
     }
     /// Resolve explicit environment/file inputs for deterministic bootstrap tests.
     pub fn resolve(env: &Value, file: &Value) -> Result<Self> {
-        let settings = vogon_configuration::settings("settings", &json!({}), env, file)
+        let mut settings = vogon_configuration::settings("settings", &json!({}), env, file)
             .map_err(|_| Error::new("invalid_settings"))?;
         let gateway = vogon_configuration::settings("gateway", &json!({}), env, file)
             .map_err(|_| Error::new("invalid_gateway_settings"))?;
@@ -78,6 +80,8 @@ impl Config {
                 .filter(|n| *n > 0)
                 .ok_or_else(|| Error::new("invalid_host_limit"))
         };
+        let retries = vogon_resilience::Policies::resolve(env, file).map_err(Error::new)?;
+        settings["dependency_retries"] = json!({"stt":retries.stt,"tts":retries.tts});
         let s3 = if settings["s3_enabled"] == true {
             let mut s3 = vogon_artifacts::store::S3Config::new(
                 settings["s3_bucket"].as_str().unwrap_or("").into(),
@@ -95,11 +99,15 @@ impl Config {
                 let token = get("AWS_SESSION_TOKEN", "");
                 s3.credentials = Some((key, secret, (!token.is_empty()).then_some(token)));
             }
+            s3.max_attempts = retries.s3.attempts as u32;
+            s3.initial_backoff = Duration::from_millis(retries.s3.initial_ms);
+            s3.max_backoff = Duration::from_millis(retries.s3.max_ms);
             Some(s3)
         } else {
             None
         };
         Ok(Self {
+            retries,
             s3,
             settings,
             gateway,

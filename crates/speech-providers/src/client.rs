@@ -112,8 +112,25 @@ impl SttClient {
         key: ApiKey,
         clock: Clock,
     ) -> Result<(Self, mpsc::UnboundedReceiver<SttOutput>)> {
+        Self::connect_with_retry(
+            endpoint,
+            config,
+            key,
+            clock,
+            vogon_resilience::Policy::once(),
+        )
+        .await
+    }
+    /// Retry only the handshake; once audio starts, failures end the stream without replay.
+    pub async fn connect_with_retry(
+        endpoint: &str,
+        config: SttConfig,
+        key: ApiKey,
+        clock: Clock,
+        retry: vogon_resilience::Policy,
+    ) -> Result<(Self, mpsc::UnboundedReceiver<SttOutput>)> {
         let mut state = SttState::new(config.clone(), clock.now());
-        let mut socket = Socket::connect(endpoint, &config.query(), &key).await?;
+        let mut socket = Socket::connect_retry(endpoint, &config.query(), &key, &retry).await?;
         let (tx, mut commands) = mpsc::channel::<SttCommand>(64);
         let (events, output) = mpsc::unbounded_channel();
         let task = tokio::spawn(async move {
@@ -277,6 +294,7 @@ pub struct TtsClient {
     key: ApiKey,
     endpoint: String,
     clock: Clock,
+    retry: vogon_resilience::Policy,
 }
 impl Drop for TtsClient {
     fn drop(&mut self) {
@@ -296,7 +314,24 @@ impl TtsClient {
         key: ApiKey,
         clock: Clock,
     ) -> Result<Self> {
-        let mut socket = Socket::connect(endpoint, &config.query(), &key).await?;
+        Self::connect_with_retry(
+            endpoint,
+            config,
+            key,
+            clock,
+            vogon_resilience::Policy::once(),
+        )
+        .await
+    }
+    /// Retain the configured handshake budget for later dirty-socket reconnects.
+    pub async fn connect_with_retry(
+        endpoint: &str,
+        config: TtsConfig,
+        key: ApiKey,
+        clock: Clock,
+        retry: vogon_resilience::Policy,
+    ) -> Result<Self> {
+        let mut socket = Socket::connect_retry(endpoint, &config.query(), &key, &retry).await?;
         let (tx, mut commands) = mpsc::channel::<TtsCommand>(64);
         let actor_clock = clock.clone();
         let task = tokio::spawn(async move {
@@ -365,6 +400,7 @@ impl TtsClient {
             config,
             key,
             endpoint: endpoint.into(),
+            retry,
             clock,
         })
     }
@@ -419,11 +455,12 @@ impl TtsClient {
     /// Replace the complete socket epoch; failed reopen leaves the client closed.
     pub async fn reconnect(&mut self) -> bool {
         self.close().await;
-        match Self::connect(
+        match Self::connect_with_retry(
             &self.endpoint,
             self.config.clone(),
             self.key.clone(),
             self.clock.clone(),
+            self.retry.clone(),
         )
         .await
         {

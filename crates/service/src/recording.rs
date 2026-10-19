@@ -19,6 +19,7 @@ pub struct Capture {
     tenant: String,
     call: String,
     clock: Clock,
+    metrics: Arc<vogon_observability::Metrics>,
 }
 impl Capture {
     /// Construct before transport startup, with the same monotonic clock as Driver.
@@ -29,7 +30,26 @@ impl Capture {
         clock: Clock,
         phone: bool,
     ) -> Arc<Self> {
+        Self::with_metrics(
+            stores,
+            tenant,
+            call,
+            clock,
+            phone,
+            Arc::new(vogon_observability::Metrics::default()),
+        )
+    }
+    /// Inject process metrics without sharing call-local recording clocks or counters.
+    pub fn with_metrics(
+        stores: Arc<Stores>,
+        tenant: String,
+        call: String,
+        clock: Clock,
+        phone: bool,
+        metrics: Arc<vogon_observability::Metrics>,
+    ) -> Arc<Self> {
         Arc::new(Self {
+            metrics,
             state: Mutex::new(State {
                 recorder: Some(Recorder::default()),
                 agent_end: 0.,
@@ -71,6 +91,7 @@ impl Capture {
                 }
             }
             Some("clear") => {
+                self.metrics.increment(vogon_observability::Event::Clear);
                 if let Some(r) = &mut s.recorder {
                     let n = r.clear(now);
                     r.event(now, "twilio_clear", json!({"discarded_samples":n}));
@@ -134,6 +155,10 @@ impl Capture {
                     .await,
             );
         }
+        for _ in &errors {
+            self.metrics
+                .increment(vogon_observability::Event::ArtifactFailed);
+        }
         errors
     }
 }
@@ -163,11 +188,16 @@ impl Observer for Capture {
         }
     }
     fn frame(&self, now: f64, detail: Value) {
+        self.metrics.frame(
+            detail["raw_rms"].as_i64().unwrap_or(0),
+            detail["clean_rms"].as_i64().unwrap_or(0),
+        );
         if let Some(r) = &mut self.state.lock().unwrap().recorder {
             r.frame(now, detail);
         }
     }
     fn event(&self, now: f64, event: &Value) {
+        self.metrics.observe(event);
         let name = match event["kind"].as_str().unwrap_or("transport_event") {
             "utterance_eager" => "eager_eot",
             "utterance_final" => "stt_final",

@@ -26,7 +26,9 @@ remaining integration. The Python gateway is the compatibility reference.
 For startup and shutdown entry/exit points, the per-call Tokio task graph,
 eager/final execution and clock interfaces, use the
 [detailed call-flow diagrams](crates/orchestration/CALL_FLOW.md). They distinguish
-implemented Rust components, Python application speculation and pending transfer/artifact hooks.
+implemented Rust components and application speculation. Transfer/artifact hooks
+are now installed by the service; [operations](OPERATIONS.md) documents retries,
+readiness, metrics and deployment limits.
 
 ```mermaid
 flowchart LR
@@ -192,6 +194,7 @@ accounting, immediate stalled-provider cancellation and TTS timeout reconnection
 Known AEC cold-start failures and changing-path leakage remain. Offline parity
 does not establish live-call quality or concurrency capacity. GPT Live testing
 is paused and excluded from default validation. See the module checklist for
-durable fact acknowledgement, transfer/recording and deployment work still pending.
+durable fact acknowledgement and deployment acceptance still pending. Transfers
+and recording are implemented with local protocol tests and Python parity.
 Service-specific compatibility and recovery limits are documented in the
 [module-10 guide](crates/service/README.md).

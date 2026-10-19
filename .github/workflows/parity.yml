@@ -1,0 +1,75 @@
+name: Python parity
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  differential:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      OPENBLAS_NUM_THREADS: "1"
+      OMP_NUM_THREADS: "1"
+      REDIS_ENABLED: "false"
+      AWS_EC2_METADATA_DISABLED: "true"
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: vogon-rust
+      - uses: actions/checkout@v4
+        with:
+          repository: LendEasy/vogon
+          ref: 9874449e9f10c536d691301ec071873049d6bc62
+          path: voice-gateway
+      - uses: actions/checkout@v4
+        with:
+          repository: LendEasy/vogon-contract
+          ref: eb312e02b38ee932893bf825b441967302a65c9c
+          path: vogon-contract
+      - uses: actions/checkout@v4
+        with:
+          repository: xiongyihui/speexdsp-python
+          ref: 152c15d73870a8f4e2c3a0746c06ef237401b3a0
+          path: speex-reference
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install reference-only dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential pkg-config swig libspeex-dev libspeexdsp-dev
+          python -m pip install setuptools wheel
+          python -m pip install -e ./vogon-contract -e './voice-gateway[dev]' -r vogon-rust/requirements-runtime.txt
+          cd speex-reference
+          python setup.py build_ext --inplace
+          python -m pip install --no-build-isolation .
+      - name: Configure toolchain and retained interpreter
+        working-directory: vogon-rust
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal
+          python tools/fetch_webrtcvad.py
+          echo "PYO3_PYTHON=$(command -v python)" >> "$GITHUB_ENV"
+          echo "PYTHONPATH=$(python -c 'import sysconfig; print(sysconfig.get_path("purelib"))'):$GITHUB_WORKSPACE/voice-gateway:$GITHUB_WORKSPACE/vogon-contract/src" >> "$GITHUB_ENV"
+          echo "CARGO_HOME=$HOME/.cargo" >> "$GITHUB_ENV"
+          echo "RUSTUP_HOME=$HOME/.rustup" >> "$GITHUB_ENV"
+          cargo fetch --locked
+          cargo build --locked --workspace
+      - name: Numerical, contract, control and streaming parity
+        working-directory: vogon-rust
+        run: |
+          python validation/modules/run.py --stage all
+          python validation/audio/run.py --stage all
+          python validation/transport/run.py
+          python validation/front/run.py
+          python validation/escalation/compare.py
+          python validation/artifacts/compare.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: parity-results
+          path: vogon-rust/validation/**/results/
+          retention-days: 14
