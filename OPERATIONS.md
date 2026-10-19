@@ -56,6 +56,28 @@ tasks own speech connections; no global retry counter influences call state or
 ## AWS SDK S3 storage
 
 `vogon-artifacts` uses native `aws-sdk-s3` and `aws-config`; no Python S3 wrapper.
+
+S3 region resolution uses `S3_REGION`, then `AWS_REGION`, then
+`AWS_DEFAULT_REGION`, then `us-east-1`. Environment overrides the dotenv file
+for each setting. This preserves the Python gateway's explicit `S3_REGION`.
+Upload/download failures emit `artifact_s3_error` with tenant/call/artifact,
+bucket and configured region, SDK failure category, AWS error code, HTTP status,
+request ID and any bucket-region response header. Raw SDK errors, response
+bodies, credentials and transcript content are excluded. `artifact_persisted`
+reports local and S3 outcomes independently; a failed cloud upload does not
+delete the local copy. `call_finalized` reports the application's EndCall
+acknowledgement and finalization error codes.
+
+The existing collections application expects `calls/{call_id}/recording.wav`,
+whereas this gateway stores `tenants/{tenant}/calls/{call_id}/recording.wav`.
+These paths are not interchangeable: the application's recording lookup still
+needs integration with the tenant-qualified artifact API/layout. Transcripts
+are produced and archived by the Python application's finalization/worker path,
+not by the gateway's three audio artifact uploads. Check EndCall acknowledgement
+and application/worker logs separately when a transcript is missing. Local
+gateway artifacts remain under the configured recording directory using the
+tenant-qualified layout; preserve them for recovery. There is no automatic
+backfill of failed uploads.
 `Cargo.lock` pins the complete SDK dependency graph. Configure `S3_ENABLED=true`,
 `S3_BUCKET` and `AWS_REGION`. Explicit AWS access key/secret/session-token fields
 from the shared dotenv are supported; otherwise the enabled SDK default credential

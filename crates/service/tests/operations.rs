@@ -4,6 +4,29 @@ use serde_json::json;
 use std::sync::Arc;
 use vogon_service::{bootstrap::Config, host::Service, store::Memory};
 #[test]
+fn s3_region_matches_python_and_environment_overrides_file() {
+    let file = json!({"S3_ENABLED":"true","S3_BUCKET":"test","S3_REGION":"us-west-2"});
+    for (env, expected) in [
+        (json!({}), "us-west-2"),
+        (json!({"AWS_REGION":"us-east-1"}), "us-west-2"),
+        (json!({"S3_REGION":"eu-west-1"}), "eu-west-1"),
+    ] {
+        assert_eq!(
+            Config::resolve(&env, &file).unwrap().s3.unwrap().region,
+            expected
+        );
+    }
+    let env = json!({"S3_ENABLED":"true","S3_BUCKET":"test","AWS_REGION":"eu-west-2"});
+    assert_eq!(
+        Config::resolve(&env, &json!({}))
+            .unwrap()
+            .s3
+            .unwrap()
+            .region,
+        "eu-west-2"
+    );
+}
+#[test]
 fn retry_configuration_is_validated_and_s3_receives_budget() {
     let c=Config::resolve(&json!({"GATEWAY_RETRY_ATTEMPTS":"4","GATEWAY_RETRY_INITIAL_MS":"20","GATEWAY_RETRY_MAX_MS":"80","GATEWAY_RETRY_STT_ATTEMPTS":"2","S3_ENABLED":"true","S3_BUCKET":"test"}),&json!({})).unwrap();
     assert_eq!(c.retries.stt.attempts, 2);

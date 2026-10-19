@@ -16,6 +16,19 @@ use std::{
     time::Duration,
 };
 use vogon_artifacts::store::{S3Config, Stores};
+#[test]
+fn diagnostics_exclude_raw_sdk_errors_and_secrets() {
+    use aws_sdk_s3::{error::SdkError, operation::put_object::PutObjectError};
+    use vogon_artifacts::store::s3_diagnostic;
+    let error: SdkError<PutObjectError> =
+        SdkError::construction_failure(std::io::Error::other("secret credential and transcript"));
+    let value = s3_diagnostic(&error);
+    assert_eq!(value["category"], "request_construction");
+    assert!(!value.to_string().contains("secret"));
+    let error: SdkError<PutObjectError> =
+        SdkError::timeout_error(std::io::Error::other("private endpoint"));
+    assert_eq!(s3_diagnostic(&error)["category"], "timeout");
+}
 #[derive(Default)]
 struct Fake {
     attempts: AtomicUsize,

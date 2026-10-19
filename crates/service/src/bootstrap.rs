@@ -82,7 +82,10 @@ impl Config {
         let s3 = if settings["s3_enabled"] == true {
             let mut s3 = vogon_artifacts::store::S3Config::new(
                 settings["s3_bucket"].as_str().unwrap_or("").into(),
-                get("AWS_REGION", &get("AWS_DEFAULT_REGION", "us-east-1")),
+                get(
+                    "S3_REGION",
+                    &get("AWS_REGION", &get("AWS_DEFAULT_REGION", "us-east-1")),
+                ),
             );
             if s3.bucket.is_empty() {
                 return Err(Error::new("s3_bucket_required"));

@@ -495,6 +495,10 @@ impl Service {
             },
         };
         let report = outcome.map_err(|_| Error::new("call_task_failed"))?;
+        eprintln!(
+            "{}",
+            json!({"event":"call_finalized", "tenant_id":record.tenant, "call_id":record.call_id, "reason":report.reason, "end_acknowledged":report.end_acknowledged, "errors":report.errors})
+        );
         if report.reason == "start_failed" || !report.errors.is_empty() {
             Err(Error::new("call_failed"))
         } else {
@@ -581,7 +585,10 @@ impl Hooks for SnapshotHooks {
         boxed(async move {
             let next = self.next.finish(id, reason.clone()).await;
             for code in self.capture.finish(&reason).await {
-                eprintln!("{}", json!({"event":"artifact_failed","code":code}));
+                eprintln!(
+                    "{}",
+                    json!({"event":"artifact_failed","code":code,"tenant_id":self.key.0,"call_id":self.key.1})
+                );
             }
             next
         })

@@ -1,5 +1,6 @@
 //! Atomic local writes and native AWS SDK S3 persistence. All paths are tenant-qualified.
 use crate::{Error, Result};
+use aws_sdk_s3::error::{ProvideErrorMetadata, SdkError};
 use aws_sdk_s3::{
     Client,
     config::{BehaviorVersion, Credentials, Region, retry::RetryConfig, timeout::TimeoutConfig},
@@ -7,6 +8,30 @@ use aws_sdk_s3::{
 };
 use std::{path::PathBuf, sync::Arc, time::Duration};
 use tokio::sync::OnceCell;
+
+/// Structured SDK diagnostics. Never include the raw error, response body or request headers.
+pub fn s3_diagnostic<E: ProvideErrorMetadata>(error: &SdkError<E>) -> serde_json::Value {
+    let category = match error {
+        SdkError::ConstructionFailure(_) => "request_construction",
+        SdkError::TimeoutError(_) => "timeout",
+        SdkError::DispatchFailure(_) => "connection",
+        SdkError::ResponseError(_) => "invalid_response",
+        SdkError::ServiceError(_) => "service",
+        _ => "unknown",
+    };
+    let safe = |s: &str| {
+        s.len() <= 256
+            && s.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"-_/+=.".contains(&b))
+    };
+    serde_json::json!({
+        "category": category,
+        "aws_code": error.code().filter(|s| safe(s)),
+        "http_status": error.raw_response().map(|r| r.status().as_u16()),
+        "request_id": error.raw_response().and_then(|r| r.headers().get("x-amz-request-id")).filter(|s| safe(s)),
+        "bucket_region": error.raw_response().and_then(|r| r.headers().get("x-amz-bucket-region")).filter(|s| safe(s)),
+    })
+}
 
 /// Immutable S3 settings; secret fields intentionally have no Debug implementation.
 #[derive(Clone)]
@@ -144,11 +169,18 @@ impl Stores {
                     .body(ByteStream::from(bytes.clone()))
                     .send()
                     .await
-                    .map_err(|_| Error("artifact_s3_put_failed"))?;
+                    .map_err(|e| {
+                        eprintln!("{}", serde_json::json!({"event":"artifact_s3_error", "operation":"put", "tenant_id":tenant, "call_id":call, "artifact":name, "bucket":config.bucket, "region":config.region, "key":key, "error":s3_diagnostic(&e)}));
+                        Error("artifact_s3_put_failed")
+                    })?;
             }
             Ok(())
         };
         let (a, b) = tokio::join!(local, cloud);
+        eprintln!(
+            "{}",
+            serde_json::json!({"event":"artifact_persisted", "tenant_id":tenant, "call_id":call, "artifact":name, "bytes":bytes.len(), "local_ok":a.is_ok(), "local_error":a.as_ref().err().map(|e: &Error| e.0), "s3_enabled":self.s3.is_some(), "s3_ok":self.s3.as_ref().map(|_| b.is_ok())})
+        );
         [a, b]
             .into_iter()
             .filter_map(|r: Result<()>| r.err().map(|e| e.0))
@@ -193,7 +225,13 @@ impl Stores {
                 Ok(Some(bytes))
             }
             Err(e) if e.as_service_error().is_some_and(|e| e.is_no_such_key()) => Ok(None),
-            Err(_) => Err(Error("artifact_s3_get_failed")),
+            Err(e) => {
+                eprintln!(
+                    "{}",
+                    serde_json::json!({"event":"artifact_s3_error", "operation":"get", "tenant_id":tenant, "call_id":call, "artifact":name, "bucket":config.bucket, "region":config.region, "error":s3_diagnostic(&e)})
+                );
+                Err(Error("artifact_s3_get_failed"))
+            }
         }
     }
     /// Validate that local persistence is writable without touching any call artifact.
