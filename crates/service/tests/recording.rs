@@ -1,4 +1,4 @@
-//! Actual-send recording, independent capture owners and tenant-authorized artifact routes.
+//! Actual-send recording, independent capture owners and durable tenant-scoped artifact routes.
 mod support;
 use serde_json::json;
 use vogon_artifacts::store::Stores;
@@ -102,14 +102,12 @@ async fn successful_capture_isolated_and_disabled_policy_has_no_artifacts() {
     tokio::fs::remove_dir_all(path).await.unwrap();
 }
 #[tokio::test]
-async fn artifact_routes_require_auth_and_tenant_record() {
+async fn archived_artifacts_require_auth_and_tenant_key_but_not_live_session() {
     let mut config = support::config();
     let path = std::env::temp_dir().join(format!("vogon-route-{}", uuid::Uuid::new_v4()));
     config.settings["recordings_path"] = json!(path);
     let gateway = support::Gateway::start(config).await;
-    gateway
-        .create("call", "text", "http://127.0.0.1:1/turn/v1")
-        .await;
+    // No session exists: model a recording whose Redis record has expired.
     gateway
         .service
         .recordings
@@ -158,6 +156,17 @@ async fn artifact_routes_require_auth_and_tenant_record() {
     let mut cfg = support::config();
     cfg.gateway["service_key"] = json!("secret");
     let protected = support::Gateway::start(cfg).await;
+    protected
+        .service
+        .recordings
+        .put(
+            "acme",
+            "call",
+            "recording.wav",
+            b"RIFF".to_vec(),
+            "audio/wav",
+        )
+        .await;
     assert_eq!(
         client
             .get(format!(
@@ -169,6 +178,19 @@ async fn artifact_routes_require_auth_and_tenant_record() {
             .unwrap()
             .status(),
         401
+    );
+    assert_eq!(
+        client
+            .get(format!(
+                "{}/v1/tenants/acme/calls/call/recording.wav",
+                protected.url
+            ))
+            .bearer_auth("secret")
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
     );
     tokio::fs::remove_dir_all(path).await.unwrap();
 }

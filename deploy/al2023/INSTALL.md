@@ -252,3 +252,26 @@ both releases and both dotenv files. No uninstall or data deletion is required.
 See [validation evidence](VALIDATION.md) and [operations](../../OPERATIONS.md).
 The local build and tests are complete; the remote cutover must be verified on
 the actual instance. This document does not claim it has already happened.
+
+### Recordings after switching from Python
+
+Rust stores audio at `tenants/{tenant}/calls/{call_id}/recording.wav`, both
+under `RECORDINGS_PATH` and in the configured S3 bucket. Python recordings
+used `{call_id}.wav` locally and `calls/{call_id}/recording.wav` in S3.
+The data-plane call artifact routes must be deployed with the matching
+lookup update: derive the tenant from the persisted call's `owner_id`, try
+Rust's key first, and fall back to the Python key only when it is absent.
+Call logs, transcripts and summaries keep their existing application keys.
+No recording copy or migration is required.
+
+Raw recording/event/frame downloads support shared local storage or a
+five-minute presigned S3 redirect. Ensure the data-plane's S3 identity can
+read the tenant-qualified prefix, and configure the same recording bucket
+and region as the gateway. Upload permissions alone are not sufficient.
+
+The Rust recording and audio-timeline routes authorize the service request
+and read the validated tenant-qualified artifact key; they no longer require
+the short-lived Redis call record. This keeps archived recordings accessible
+after session expiry or a gateway restart. Deploy the updated Rust binary for
+this historical timeline fix, and the updated data-plane for recording-player
+lookup. Keep `GATEWAY_SERVICE_KEY` configured on both services.

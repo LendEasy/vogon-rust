@@ -437,14 +437,8 @@ async fn artifact(
     h: HeaderMap,
 ) -> HttpResult<Response> {
     authorize(&s, &h)?;
-    if s.store
-        .get((tenant.clone(), id.clone()))
-        .await
-        .map_err(storage)?
-        .is_none()
-    {
-        return Err(Failure(StatusCode::NOT_FOUND, "not found"));
-    }
+    // Artifacts outlive the Redis session. Service authorization above and
+    // Stores' validated tenant-qualified key enforce access without a TTL gate.
     if !matches!(
         name.as_str(),
         "recording.wav" | "audio-events.json" | "frames.csv" | "audio-timeline"
