@@ -103,6 +103,7 @@ from Git. Four-call validation is not a production-capacity claim.
 | [MODULES.md](MODULES.md) | Modules 1–13, completed work and remaining acceptance |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Composition, ownership and audio/library boundaries |
 | [Call flow](crates/orchestration/CALL_FLOW.md) | ASCII diagrams for eager execution, clocks and timers |
+| [PERFORMANCE.md](PERFORMANCE.md) | CPU and memory against the Python gateway, at 1, 5 and 20 simultaneous calls |
 | [Service](crates/service/README.md) | Routes, authentication, sessions and shutdown |
 | [Examples](examples/README.md) | Runnable echo Turn service |
 | [DOCUMENTATION.md](DOCUMENTATION.md) | API documentation and generated-source maintenance |
