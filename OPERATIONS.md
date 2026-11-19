@@ -168,18 +168,24 @@ speculative generations remain call-local.
 
 ### Log lines
 
-Every line the gateway writes to standard error is one JSON object from
-`vogon_observability::emit`, and every line opens with the same four labels:
+Every line the gateway writes to standard error comes from
+`vogon_observability::emit` and has the layout the Python services use:
 
-| label | meaning |
+```
+2026-11-19 20:40:09,123 ERROR [vogon.artifacts] [d409a75d-...] artifact_s3_error operation=put tenant_id=3a54... key=tenants/.../recording.wav error.aws_code=AccessDenied error.http_status=403
+```
+
+| position | meaning |
 |---|---|
-| `level` | `info` expected lifecycle, `warn` degraded but served, `error` needs action |
-| `service` | always `vogon-gateway` |
-| `component` | the crate that wrote the line (`service`, `artifacts`, `redis`, `escalation`) |
-| `event` | fixed event name |
+| time | UTC, milliseconds after the comma |
+| level | `INFO` expected lifecycle, `WARNING` degraded but served, `ERROR` needs action |
+| `[vogon.<component>]` | the crate that wrote the line (`service`, `artifacts`, `redis`, `escalation`) |
+| `[<call id>]` | the call the line belongs to, `-` when it belongs to none |
+| event | fixed event name, then `name=value` details |
 
-Lines about one call also carry `tenant_id` and `call_id`; socket lines carry
-`socket_id`, phone calls `provider_call_id`. Failures carry a fixed `code`.
+A nested detail is written `outer.inner=value`; a value with spaces is quoted;
+an absent or empty value is left out. Call lines also carry `tenant_id`; socket lines
+carry `socket_id`, phone calls `provider_call_id`. Failures carry a fixed `code`.
 One call writes `call_started`, `artifact_persisted` per artifact,
 `call_finalized` (the driver's report: reason, EndCall acknowledgement, error
 codes, turn requests, input frames) and `call_closed` (terminal state and
@@ -191,8 +197,8 @@ means the connection was never established, `true` a slow or lost command.
 Lines never contain transcripts, provider bodies, credentials or raw error
 text. Distributed tracing is not implemented.
 
-Filter one call: `journalctl -u vogon-rust -o cat | jq -c 'select(.call_id=="<id>")'`.
-Failures only: `... | jq -c 'select(.level=="error")'`.
+One call: `journalctl -u vogon-rust -o cat | grep '<call id>'`.
+Failures only: `journalctl -u vogon-rust -o cat | grep ' ERROR '`.
 
 ## Task ownership and shutdown
 

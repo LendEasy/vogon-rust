@@ -164,36 +164,102 @@ pub enum Level {
 impl Level {
     fn label(self) -> &'static str {
         match self {
-            Level::Info => "info",
-            Level::Warn => "warn",
-            Level::Error => "error",
+            Level::Info => "INFO",
+            Level::Warn => "WARNING",
+            Level::Error => "ERROR",
         }
     }
 }
-/// The one log line format of the gateway: a JSON object that always opens with the same
-/// four labels (`level`, `service`, `component`, `event`), followed by the event's own fields.
-/// `component` is the crate that wrote it. Fields carry identifiers and fixed codes only;
-/// callers must not pass provider bodies, transcripts, credentials or raw error text.
+/// The one log line format of the gateway, the same shape the Python services write:
+/// `2026-11-19 20:40:09,123 ERROR [vogon.artifacts] [<call id>] artifact_s3_error key=value ...`
+/// The level is the second word, so an error is visible at a glance. `component` is the crate
+/// that wrote it; the call id is `-` on lines that belong to no call. Fields carry identifiers
+/// and fixed codes only; callers must not pass provider bodies, transcripts, credentials or
+/// raw error text.
 pub fn line(level: Level, component: &'static str, event: &'static str, fields: &Value) -> String {
+    let since_epoch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    line_at(
+        since_epoch.as_millis() as u64,
+        level,
+        component,
+        event,
+        fields,
+    )
+}
+/// `line` with the clock passed in (milliseconds since the Unix epoch, printed in UTC).
+pub fn line_at(
+    epoch_ms: u64,
+    level: Level,
+    component: &'static str,
+    event: &'static str,
+    fields: &Value,
+) -> String {
+    let call = fields["call_id"].as_str().filter(|id| !id.is_empty());
     let mut out = format!(
-        "{{\"level\":\"{}\",\"service\":\"vogon-gateway\",\"component\":\"{component}\",\"event\":\"{event}\"",
-        level.label()
+        "{} {} [vogon.{component}] [{}] {event}",
+        timestamp(epoch_ms),
+        level.label(),
+        call.unwrap_or("-")
     );
     if let Some(fields) = fields.as_object() {
         for (name, value) in fields {
-            if matches!(name.as_str(), "level" | "service" | "component" | "event") {
-                continue;
+            if name != "call_id" {
+                pairs(&mut out, name, value);
             }
-            out.push(',');
-            out.push_str(&Value::String(name.clone()).to_string());
-            out.push(':');
-            out.push_str(&value.to_string());
         }
     }
-    out.push('}');
     out
 }
-/// Write one labelled line to standard error (the journal stamps the time and the host).
+/// Append ` name=value`; a nested object becomes `outer.inner=value`, an absent or empty value is left out.
+fn pairs(out: &mut String, name: &str, value: &Value) {
+    match value {
+        Value::Null => {}
+        Value::String(text) if text.is_empty() => {}
+        Value::Object(inner) => {
+            for (inner_name, inner_value) in inner {
+                pairs(out, &format!("{name}.{inner_name}"), inner_value);
+            }
+        }
+        Value::String(text)
+            if !text
+                .chars()
+                .any(|c| c.is_whitespace() || c == '"' || c == '=') =>
+        {
+            out.push_str(&format!(" {name}={text}"));
+        }
+        other => out.push_str(&format!(" {name}={other}")),
+    }
+}
+/// `YYYY-MM-DD HH:MM:SS,mmm` in UTC, the layout of Python's default `asctime`.
+fn timestamp(epoch_ms: u64) -> String {
+    let seconds = epoch_ms / 1000;
+    let (days, of_day) = (seconds / 86_400, seconds % 86_400);
+    // Civil date from a day count (Howard Hinnant's algorithm), valid for the whole Unix era.
+    let shifted = days + 719_468;
+    let era = shifted / 146_097;
+    let day_of_era = shifted % 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_index = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_index + 2) / 5 + 1;
+    let month = if month_index < 10 {
+        month_index + 3
+    } else {
+        month_index - 9
+    };
+    let year = year_of_era + era * 400 + u64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02} {:02}:{:02}:{:02},{:03}",
+        of_day / 3600,
+        of_day % 3600 / 60,
+        of_day % 60,
+        epoch_ms % 1000
+    )
+}
+/// Write one line to standard error.
 pub fn emit(level: Level, component: &'static str, event: &'static str, fields: Value) {
     eprintln!("{}", line(level, component, event, &fields));
 }
@@ -227,27 +293,36 @@ mod tests {
         assert!(text.contains("le=\"100\"} 1"));
     }
     #[test]
-    fn every_line_opens_with_the_same_four_labels() {
-        let text = line(
+    fn a_line_reads_like_the_python_services_with_the_level_second() {
+        let text = line_at(
+            1_795_120_809_123,
             Level::Error,
             "artifacts",
             "artifact_s3_error",
-            &serde_json::json!({"call_id":"c1","event":"spoofed","error":{"aws_code":"AccessDenied"}}),
+            &serde_json::json!({"operation":"put","tenant_id":"t1","call_id":"c1","local_error":null,"bytes":4,"error":{"aws_code":"AccessDenied","http_status":403}}),
         );
-        assert!(text.starts_with(
-            "{\"level\":\"error\",\"service\":\"vogon-gateway\",\"component\":\"artifacts\",\"event\":\"artifact_s3_error\","
-        ));
-        let parsed: Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(parsed["event"], "artifact_s3_error");
-        assert_eq!(parsed["call_id"], "c1");
-        assert_eq!(parsed["error"]["aws_code"], "AccessDenied");
-        assert!(!text.contains("spoofed"));
+        assert_eq!(
+            text,
+            "2026-11-19 20:40:09,123 ERROR [vogon.artifacts] [c1] artifact_s3_error operation=put tenant_id=t1 bytes=4 error.aws_code=AccessDenied error.http_status=403"
+        );
     }
     #[test]
-    fn a_line_without_fields_is_still_one_json_object() {
-        let text = line(Level::Info, "service", "gateway_listening", &Value::Null);
-        let parsed: Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(parsed["level"], "info");
-        assert_eq!(parsed.as_object().unwrap().len(), 4);
+    fn a_line_for_no_call_marks_the_call_slot_and_quotes_awkward_values() {
+        let text = line_at(
+            0,
+            Level::Info,
+            "service",
+            "gateway_listening",
+            &serde_json::json!({"detail":"bind failed: in use","errors":["a","b"],"empty":""}),
+        );
+        assert_eq!(
+            text,
+            "1970-01-01 00:00:00,000 INFO [vogon.service] [-] gateway_listening detail=\"bind failed: in use\" errors=[\"a\",\"b\"]"
+        );
+    }
+    #[test]
+    fn the_calendar_handles_a_leap_day_and_a_year_end() {
+        assert_eq!(timestamp(1_709_251_199_000), "2024-02-29 23:59:59,000");
+        assert_eq!(timestamp(1_735_689_600_000), "2025-01-01 00:00:00,000");
     }
 }
