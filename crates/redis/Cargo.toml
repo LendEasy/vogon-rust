@@ -6,6 +6,7 @@ publish = false
 license = "Apache-2.0"
 
 [dependencies]
+vogon-observability = { path = "../observability" }
 redis = { version = "0.32", features = ["tokio-rustls-comp", "connection-manager", "cluster-async"] }
 tokio = { version = "1", features = ["sync", "time"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }

@@ -153,9 +153,49 @@ impl Metrics {
         out
     }
 }
-/// Structured log with a fixed event/code vocabulary; callers must not pass provider bodies.
-pub fn log(event: &'static str, code: &'static str) {
-    eprintln!("{}", serde_json::json!({"event":event,"code":code}));
+/// Severity label of one log line: `info` is expected lifecycle, `warn` a degraded but
+/// served call, `error` a failure someone has to act on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Level {
+    Info,
+    Warn,
+    Error,
+}
+impl Level {
+    fn label(self) -> &'static str {
+        match self {
+            Level::Info => "info",
+            Level::Warn => "warn",
+            Level::Error => "error",
+        }
+    }
+}
+/// The one log line format of the gateway: a JSON object that always opens with the same
+/// four labels (`level`, `service`, `component`, `event`), followed by the event's own fields.
+/// `component` is the crate that wrote it. Fields carry identifiers and fixed codes only;
+/// callers must not pass provider bodies, transcripts, credentials or raw error text.
+pub fn line(level: Level, component: &'static str, event: &'static str, fields: &Value) -> String {
+    let mut out = format!(
+        "{{\"level\":\"{}\",\"service\":\"vogon-gateway\",\"component\":\"{component}\",\"event\":\"{event}\"",
+        level.label()
+    );
+    if let Some(fields) = fields.as_object() {
+        for (name, value) in fields {
+            if matches!(name.as_str(), "level" | "service" | "component" | "event") {
+                continue;
+            }
+            out.push(',');
+            out.push_str(&Value::String(name.clone()).to_string());
+            out.push(':');
+            out.push_str(&value.to_string());
+        }
+    }
+    out.push('}');
+    out
+}
+/// Write one labelled line to standard error (the journal stamps the time and the host).
+pub fn emit(level: Level, component: &'static str, event: &'static str, fields: Value) {
+    eprintln!("{}", line(level, component, event, &fields));
 }
 #[cfg(test)]
 mod tests {
@@ -185,5 +225,29 @@ mod tests {
         assert!(!text.contains("private"));
         assert!(text.contains("vogon_tts_first_chunk_ms_count 2"));
         assert!(text.contains("le=\"100\"} 1"));
+    }
+    #[test]
+    fn every_line_opens_with_the_same_four_labels() {
+        let text = line(
+            Level::Error,
+            "artifacts",
+            "artifact_s3_error",
+            &serde_json::json!({"call_id":"c1","event":"spoofed","error":{"aws_code":"AccessDenied"}}),
+        );
+        assert!(text.starts_with(
+            "{\"level\":\"error\",\"service\":\"vogon-gateway\",\"component\":\"artifacts\",\"event\":\"artifact_s3_error\","
+        ));
+        let parsed: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(parsed["event"], "artifact_s3_error");
+        assert_eq!(parsed["call_id"], "c1");
+        assert_eq!(parsed["error"]["aws_code"], "AccessDenied");
+        assert!(!text.contains("spoofed"));
+    }
+    #[test]
+    fn a_line_without_fields_is_still_one_json_object() {
+        let text = line(Level::Info, "service", "gateway_listening", &Value::Null);
+        let parsed: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(parsed["level"], "info");
+        assert_eq!(parsed.as_object().unwrap().len(), 4);
     }
 }

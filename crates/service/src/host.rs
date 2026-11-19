@@ -18,6 +18,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, watch};
 use uuid::Uuid;
 use vogon_clocks::Clock;
 use vogon_contracts::{CallConfig, EscalationOrder, StartCallRequest};
+use vogon_observability::{Level, emit};
 use vogon_orchestration::{
     client::{Config as ApiConfig, HttpTurnClient},
     driver::{Config as DriverConfig, Driver},
@@ -69,7 +70,14 @@ impl Service {
                 std::path::Path::new(path),
                 config.settings["front_max_words"].as_u64().unwrap_or(20) as usize,
             )
-            .map_err(|_| eprintln!("front_artifact_load_failed"))
+            .map_err(|_| {
+                emit(
+                    Level::Warn,
+                    "service",
+                    "front_artifact_load_failed",
+                    json!({}),
+                )
+            })
             .ok()
         };
         let transfer_store = if config.gateway["session_store"] == "redis" {
@@ -232,7 +240,12 @@ impl Service {
             )
             .await;
         if result.is_err() {
-            eprintln!("{{\"event\":\"status_relay_failed\"}}");
+            emit(
+                Level::Warn,
+                "service",
+                "status_relay_failed",
+                json!({"tenant_id":r.tenant,"call_id":r.call_id,"state":state}),
+            );
         }
     }
     /// Resolve a capability/provider identity, claim it once, then run the native driver.
@@ -251,6 +264,12 @@ impl Service {
         let (record, initial) = match resolved {
             Ok(v) => v,
             Err(e) => {
+                emit(
+                    Level::Warn,
+                    "service",
+                    "socket_rejected",
+                    json!({"code":e.0,"socket_id":lease.id}),
+                );
                 if e.0 == "invalid_token" {
                     let _=socket.send(Message::Text(json!({"type":"server.error","payload":{"code":"invalid_token","fatal":true}}).to_string().into())).await;
                 }
@@ -266,16 +285,38 @@ impl Service {
                 return;
             }
         };
+        let labels = json!({"tenant_id":record.tenant,"call_id":record.call_id,"mode":record.mode,"provider_call_id":record.provider_call_id,"socket_id":lease.id});
+        let labelled = |extra: Value| {
+            let mut fields = labels.clone();
+            if let (Some(fields), Some(extra)) = (fields.as_object_mut(), extra.as_object()) {
+                fields.extend(extra.clone());
+            }
+            fields
+        };
         let Ok(_capacity) = self.calls.clone().try_acquire_owned() else {
             self.metrics
                 .increment(vogon_observability::Event::AdmissionRejected);
+            emit(
+                Level::Warn,
+                "service",
+                "call_rejected",
+                labelled(json!({"code":"call_capacity_reached"})),
+            );
             close(&mut socket, 1013).await;
             return;
         };
         let key = (record.tenant.clone(), record.call_id.clone());
         match self.store.claim(key.clone(), lease.id.clone()).await {
             Ok(true) => {}
-            _ => {
+            claim => {
+                emit(
+                    Level::Warn,
+                    "service",
+                    "call_rejected",
+                    labelled(
+                        json!({"code":if claim.is_ok() {"call_already_claimed"} else {"session_claim_failed"}}),
+                    ),
+                );
                 close(&mut socket, 4003).await;
                 return;
             }
@@ -283,6 +324,8 @@ impl Service {
         lease.handshake.take();
         self.metrics
             .increment(vogon_observability::Event::CallStarted);
+        emit(Level::Info, "service", "call_started", labels.clone());
+        let started = std::time::Instant::now();
         let result = self.run(socket, &record, initial, shutdown).await;
         let terminal = if result.is_ok() {
             self.metrics
@@ -293,6 +336,18 @@ impl Service {
                 .increment(vogon_observability::Event::CallFailed);
             State::Failed
         };
+        emit(
+            if result.is_ok() {
+                Level::Info
+            } else {
+                Level::Error
+            },
+            "service",
+            "call_closed",
+            labelled(
+                json!({"state":terminal,"code":result.as_ref().err().map(|e| e.0.clone()),"duration_ms":started.elapsed().as_millis() as u64}),
+            ),
+        );
         match self
             .store
             .change(key.clone(), Change::Transition(terminal))
@@ -300,10 +355,20 @@ impl Service {
         {
             Ok(true) => self.relay(&record, terminal).await,
             Ok(false) => {}
-            Err(_) => eprintln!("session_finalize_failed"),
+            Err(e) => emit(
+                Level::Error,
+                "service",
+                "session_finalize_failed",
+                labelled(json!({"code":e.0})),
+            ),
         }
-        if self.store.release(key, lease.id.clone()).await.is_err() {
-            eprintln!("session_claim_release_failed");
+        if let Err(e) = self.store.release(key, lease.id.clone()).await {
+            emit(
+                Level::Error,
+                "service",
+                "session_claim_release_failed",
+                labelled(json!({"code":e.0})),
+            );
         }
     }
     /// Resolve token authority or the bounded phone handshake before allocating a driver.
@@ -495,9 +560,15 @@ impl Service {
             },
         };
         let report = outcome.map_err(|_| Error::new("call_task_failed"))?;
-        eprintln!(
-            "{}",
-            json!({"event":"call_finalized", "tenant_id":record.tenant, "call_id":record.call_id, "reason":report.reason, "end_acknowledged":report.end_acknowledged, "errors":report.errors})
+        emit(
+            if report.reason == "start_failed" || !report.errors.is_empty() {
+                Level::Error
+            } else {
+                Level::Info
+            },
+            "service",
+            "call_finalized",
+            json!({"tenant_id":record.tenant, "call_id":record.call_id, "reason":report.reason, "end_acknowledged":report.end_acknowledged, "errors":report.errors, "turn_requests":report.requests, "stale_responses":report.stale_responses, "input_frames":report.input_frames}),
         );
         if report.reason == "start_failed" || !report.errors.is_empty() {
             Err(Error::new("call_failed"))
@@ -585,9 +656,11 @@ impl Hooks for SnapshotHooks {
         boxed(async move {
             let next = self.next.finish(id, reason.clone()).await;
             for code in self.capture.finish(&reason).await {
-                eprintln!(
-                    "{}",
-                    json!({"event":"artifact_failed","code":code,"tenant_id":self.key.0,"call_id":self.key.1})
+                emit(
+                    Level::Error,
+                    "service",
+                    "artifact_failed",
+                    json!({"code":code,"tenant_id":self.key.0,"call_id":self.key.1}),
                 );
             }
             next

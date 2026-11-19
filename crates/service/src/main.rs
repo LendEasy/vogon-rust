@@ -1,5 +1,6 @@
 //! Standalone multithread gateway process; dotenv defaults to the existing Python gateway file.
 use std::{path::PathBuf, sync::Arc};
+use vogon_observability::{Level, emit};
 use vogon_service::{
     bootstrap::Config,
     host::Service,
@@ -9,7 +10,12 @@ use vogon_service::{
 #[tokio::main]
 async fn main() {
     if let Err(error) = run().await {
-        eprintln!("gateway startup/shutdown failed: {error}");
+        emit(
+            Level::Error,
+            "service",
+            "gateway_stopped_with_error",
+            serde_json::json!({"detail":error.to_string()}),
+        );
         std::process::exit(1);
     }
 }
@@ -43,16 +49,23 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let address = config.bind.clone();
     let service = Service::new(config, store)?;
     let capabilities = service.startup().await?;
-    eprintln!(
-        "{}",
-        serde_json::json!({"event":"gateway_capabilities","capabilities":capabilities})
+    emit(
+        Level::Info,
+        "service",
+        "gateway_capabilities",
+        serde_json::json!({"capabilities":capabilities}),
     );
     if args.iter().any(|s| s == "--check") {
         println!("{}", service.readiness("text").await);
         return Ok(());
     }
     let listener = tokio::net::TcpListener::bind(&address).await?;
-    eprintln!("vogon gateway listening on {}", listener.local_addr()?);
+    emit(
+        Level::Info,
+        "service",
+        "gateway_listening",
+        serde_json::json!({"address":listener.local_addr()?.to_string(),"version":env!("CARGO_PKG_VERSION")}),
+    );
     let stop = service.clone();
     axum::serve(listener, routes::router(service.clone()))
         .with_graceful_shutdown(async move {
@@ -68,7 +81,12 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 let _ = tokio::signal::ctrl_c().await;
             }
             if let Err(error) = stop.shutdown().await {
-                eprintln!("{error}");
+                emit(
+                    Level::Error,
+                    "service",
+                    "gateway_shutdown_failed",
+                    serde_json::json!({"detail":error.to_string()}),
+                );
             }
         })
         .await?;

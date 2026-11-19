@@ -71,6 +71,12 @@ impl Client {
             .cloned()
     }
 
+    /// Whether the shared connection has been established; a timeout before this is a
+    /// connection problem, a timeout after it is a slow or lost command.
+    pub fn connected(&self) -> bool {
+        self.0.connection.initialized()
+    }
+
     /// Establish startup connectivity without issuing application commands.
     pub async fn connect(&self, retry: &Policy) -> RedisResult<()> {
         self.connection(retry).await.map(|_| ())
@@ -114,9 +120,22 @@ pub fn transient(error: &redis::RedisError) -> bool {
 
 /// Emit a bounded structured diagnostic, omitting the original error payload.
 pub fn log_error(operation: &'static str, error: &redis::RedisError) {
-    eprintln!(
-        "{}",
-        serde_json::json!({"event":"redis_error","operation":operation,"code":category(error)})
+    vogon_observability::emit(
+        vogon_observability::Level::Error,
+        "redis",
+        "redis_error",
+        serde_json::json!({"operation":operation,"code":category(error)}),
+    );
+}
+
+/// A caller's own deadline expired before Redis answered: no server error exists to classify,
+/// so say which operation gave up, after how long, and whether a connection existed at all.
+pub fn log_deadline(operation: &'static str, client: &Client, waited: Duration) {
+    vogon_observability::emit(
+        vogon_observability::Level::Error,
+        "redis",
+        "redis_error",
+        serde_json::json!({"operation":operation,"code":"deadline_exceeded","connected":client.connected(),"waited_ms":waited.as_millis() as u64}),
     );
 }
 

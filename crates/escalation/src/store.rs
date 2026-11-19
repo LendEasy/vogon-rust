@@ -5,6 +5,8 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::{sync::Mutex, time::Instant};
 
 type Entries = HashMap<String, (Vec<u8>, Instant)>;
+/// Longest one transfer-store command may take, connection establishment included.
+const DEADLINE: Duration = Duration::from_secs(5);
 /// Memory for single-process development; Redis for callbacks landing on other workers.
 #[derive(Clone)]
 pub struct Store {
@@ -61,11 +63,14 @@ impl Store {
                 m.retain(|_, (_, until)| *until > Instant::now());
                 Ok(m.get(key).map(|(v, _)| v.clone()))
             }
-            Backend::Redis { client } => tokio::time::timeout(Duration::from_secs(5), async {
+            Backend::Redis { client } => tokio::time::timeout(DEADLINE, async {
                 client.query(redis::cmd("GET").arg(key), &self.retry).await
             })
             .await
-            .map_err(|_| Error("transfer_store_timeout"))?
+            .map_err(|_| {
+                vogon_redis::log_deadline("transfer_read", client, DEADLINE);
+                Error("transfer_store_timeout")
+            })?
             .map_err(|e: redis::RedisError| {
                 vogon_redis::log_error("transfer_read", &e);
                 Error(if vogon_redis::transient(&e) {
@@ -100,7 +105,7 @@ impl Store {
             }
             Backend::Redis { client } => {
                 let script = "local v=redis.call('get',KEYS[1]); if ARGV[1]=='0' then if v then return 0 end elseif v~=ARGV[2] then return 0 end; if ARGV[3]=='0' then redis.call('del',KEYS[1]) else redis.call('set',KEYS[1],ARGV[4],'PX',ARGV[5]) end; return 1";
-                let value: i64 = tokio::time::timeout(Duration::from_secs(5), async {
+                let value: i64 = tokio::time::timeout(DEADLINE, async {
                     // Establish/reconnect safely, but never replay an ambiguous write.
                     client
                         .query(
@@ -118,7 +123,10 @@ impl Store {
                         .await
                 })
                 .await
-                .map_err(|_| Error("transfer_store_timeout"))?
+                .map_err(|_| {
+                    vogon_redis::log_deadline("transfer_cas", client, DEADLINE);
+                    Error("transfer_store_timeout")
+                })?
                 .map_err(|e| {
                     vogon_redis::log_error("transfer_cas", &e);
                     Error("transfer_store_unavailable")

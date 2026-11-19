@@ -206,7 +206,12 @@ impl Manager {
                 }
             }
             this.report_failures.fetch_add(1,Ordering::Relaxed);
-            eprintln!("{{\"event\":\"transfer_fact_delivery_failed\"}}");
+            vogon_observability::emit(
+                vogon_observability::Level::Error,
+                "escalation",
+                "transfer_fact_delivery_failed",
+                json!({"call_id":binding.call_id,"provider_call_id":binding.caller_sid,"attempts":attempts}),
+            );
         });
     }
     /// Bounded native REST call. Never retries an ambiguous dial automatically.
@@ -878,7 +883,12 @@ impl Manager {
                     let _ = this.store.cas(&key, Some(&bytes), None, TTL).await;
                 }
                 if result.is_err() {
-                    eprintln!("{{\"event\":\"transfer_voice_store_failed\"}}");
+                    vogon_observability::emit(
+                        vogon_observability::Level::Error,
+                        "escalation",
+                        "transfer_voice_store_failed",
+                        json!({"provider_call_id":sid,"line":line,"code":result.as_ref().err().map(|e| e.0)}),
+                    );
                 }
             });
         }

@@ -2467,6 +2467,7 @@ dependencies = [
  "tokio",
  "uuid",
  "vogon-audio-core",
+ "vogon-observability",
 ]
 
 [[package]]
@@ -2546,6 +2547,7 @@ dependencies = [
  "tokio",
  "uuid",
  "vogon-contracts",
+ "vogon-observability",
  "vogon-redis",
  "vogon-resilience",
 ]
@@ -2626,6 +2628,7 @@ dependencies = [
  "rustls",
  "serde_json",
  "tokio",
+ "vogon-observability",
  "vogon-resilience",
 ]
 

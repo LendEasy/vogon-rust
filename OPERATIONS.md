@@ -164,9 +164,35 @@ Turn request latency and scalar raw/clean RMS sums. The latter are diagnostics,
 not an AEC quality score. Turn latency includes ordering wait and retries.
 Labels never contain call IDs, tenant IDs, transcripts or provider bodies.
 Process aggregates are shared only for reporting; clocks, event sequences and
-speculative generations remain call-local. New operational failure logs use fixed
-JSON event/code fields. This does not migrate every existing diagnostic to one
-structured logging format or implement distributed tracing.
+speculative generations remain call-local.
+
+### Log lines
+
+Every line the gateway writes to standard error is one JSON object from
+`vogon_observability::emit`, and every line opens with the same four labels:
+
+| label | meaning |
+|---|---|
+| `level` | `info` expected lifecycle, `warn` degraded but served, `error` needs action |
+| `service` | always `vogon-gateway` |
+| `component` | the crate that wrote the line (`service`, `artifacts`, `redis`, `escalation`) |
+| `event` | fixed event name |
+
+Lines about one call also carry `tenant_id` and `call_id`; socket lines carry
+`socket_id`, phone calls `provider_call_id`. Failures carry a fixed `code`.
+One call writes `call_started`, `artifact_persisted` per artifact,
+`call_finalized` (the driver's report: reason, EndCall acknowledgement, error
+codes, turn requests, input frames) and `call_closed` (terminal state and
+duration). A socket that never becomes a call writes `socket_rejected` or
+`call_rejected` with the reason. A Redis deadline that expires in the caller
+(no server error to classify) writes `redis_error` with
+`code=deadline_exceeded`, the operation, the wait and `connected`: `false`
+means the connection was never established, `true` a slow or lost command.
+Lines never contain transcripts, provider bodies, credentials or raw error
+text. Distributed tracing is not implemented.
+
+Filter one call: `journalctl -u vogon-rust -o cat | jq -c 'select(.call_id=="<id>")'`.
+Failures only: `... | jq -c 'select(.level=="error")'`.
 
 ## Task ownership and shutdown
 

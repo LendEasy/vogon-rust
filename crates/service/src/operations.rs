@@ -56,7 +56,12 @@ impl Service {
             && let Some(front) = &self.clients.front
             && let Err(error) = front.http.warm(std::time::Duration::from_secs(2)).await
         {
-            eprintln!("front_warm_failed: {}", error.code);
+            vogon_observability::emit(
+                vogon_observability::Level::Warn,
+                "service",
+                "front_warm_failed",
+                json!({"code":error.code}),
+            );
         }
         Ok(checks)
     }

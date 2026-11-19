@@ -170,16 +170,22 @@ impl Stores {
                     .send()
                     .await
                     .map_err(|e| {
-                        eprintln!("{}", serde_json::json!({"event":"artifact_s3_error", "operation":"put", "tenant_id":tenant, "call_id":call, "artifact":name, "bucket":config.bucket, "region":config.region, "key":key, "error":s3_diagnostic(&e)}));
+                        vogon_observability::emit(vogon_observability::Level::Error, "artifacts", "artifact_s3_error", serde_json::json!({"operation":"put", "tenant_id":tenant, "call_id":call, "artifact":name, "bucket":config.bucket, "region":config.region, "key":key, "error":s3_diagnostic(&e)}));
                         Error("artifact_s3_put_failed")
                     })?;
             }
             Ok(())
         };
         let (a, b) = tokio::join!(local, cloud);
-        eprintln!(
-            "{}",
-            serde_json::json!({"event":"artifact_persisted", "tenant_id":tenant, "call_id":call, "artifact":name, "bytes":bytes.len(), "local_ok":a.is_ok(), "local_error":a.as_ref().err().map(|e: &Error| e.0), "s3_enabled":self.s3.is_some(), "s3_ok":self.s3.as_ref().map(|_| b.is_ok())})
+        vogon_observability::emit(
+            if a.is_ok() && b.is_ok() {
+                vogon_observability::Level::Info
+            } else {
+                vogon_observability::Level::Error
+            },
+            "artifacts",
+            "artifact_persisted",
+            serde_json::json!({"tenant_id":tenant, "call_id":call, "artifact":name, "key":key, "bytes":bytes.len(), "local_ok":a.is_ok(), "local_error":a.as_ref().err().map(|e: &Error| e.0), "s3_enabled":self.s3.is_some(), "s3_ok":self.s3.as_ref().map(|_| b.is_ok())}),
         );
         [a, b]
             .into_iter()
@@ -226,9 +232,11 @@ impl Stores {
             }
             Err(e) if e.as_service_error().is_some_and(|e| e.is_no_such_key()) => Ok(None),
             Err(e) => {
-                eprintln!(
-                    "{}",
-                    serde_json::json!({"event":"artifact_s3_error", "operation":"get", "tenant_id":tenant, "call_id":call, "artifact":name, "bucket":config.bucket, "region":config.region, "error":s3_diagnostic(&e)})
+                vogon_observability::emit(
+                    vogon_observability::Level::Error,
+                    "artifacts",
+                    "artifact_s3_error",
+                    serde_json::json!({"operation":"get", "tenant_id":tenant, "call_id":call, "artifact":name, "bucket":config.bucket, "region":config.region, "error":s3_diagnostic(&e)}),
                 );
                 Err(Error("artifact_s3_get_failed"))
             }

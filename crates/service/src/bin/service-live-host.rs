@@ -55,7 +55,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .expect("signal");
             tokio::select! {_=tokio::signal::ctrl_c()=>{},_=terminate.recv()=>{}}
             if stopping.shutdown().await.is_err() {
-                eprintln!("live_host_shutdown_failed");
+                vogon_observability::emit(
+                    vogon_observability::Level::Error,
+                    "service",
+                    "live_host_shutdown_failed",
+                    serde_json::json!({}),
+                );
             }
         })
         .await?;
