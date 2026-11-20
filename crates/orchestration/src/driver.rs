@@ -199,6 +199,25 @@ impl Driver {
                 .clone()
                 .unwrap_or_else(|| json!({}));
             let ready = json!({"call_id":self.config.start.call_id,"persona_name":start.call_config.persona_name,"ambience":{"enabled":ambience.get("enabled").unwrap_or(&json!(false)),"room":ambience.get("room").unwrap_or(&json!(false)),"typing":ambience.get("typing").unwrap_or(&json!(false)),"duckFactor":ambience.get("duck_factor").unwrap_or(&json!(0.)),"typingDelayMs":ambience.get("typing_delay_ms").unwrap_or(&json!(0)),"typingGain":ambience.get("typing_gain").unwrap_or(&json!(0.))}});
+            // What may speak while a reply is pending: nothing at all is worth a warning, since the
+            // caller then hears only the background sound for the whole wait.
+            let hold_speech = if opened.source.is_some() {
+                "front_model"
+            } else if start.call_config.filler.is_some() {
+                "stock_phrases"
+            } else {
+                "none"
+            };
+            vogon_observability::emit(
+                if hold_speech == "none" && self.config.start.mode != "text" {
+                    vogon_observability::Level::Warn
+                } else {
+                    vogon_observability::Level::Info
+                },
+                "orchestration",
+                "hold_speech",
+                json!({"call_id":self.config.start.call_id,"source":hold_speech}),
+            );
             let initial = ProcessEventsResponse {
                 speak: start.speak,
                 client_events: start.client_events,
@@ -408,12 +427,41 @@ impl Context {
             );
         }
         let mut revision = self.shared.revision.subscribe();
+        // A caller's final whose reply is still pending when they speak again: tell the turn
+        // service at once, so it can stop working on an answer nobody will hear.
+        let pending_id = request.request_id.clone();
+        let supersedable = trigger.caller && !trigger.speculative;
+        let supersede = |context: &Arc<Self>| {
+            let (api, call_id, request_id) = (
+                context.api.clone(),
+                context.config.start.call_id.clone(),
+                pending_id.clone(),
+            );
+            tokio::spawn(async move {
+                let accepted = api
+                    .supersede(call_id.clone(), request_id.clone())
+                    .await
+                    .is_ok();
+                vogon_observability::emit(
+                    vogon_observability::Level::Info,
+                    "orchestration",
+                    "turn_superseded",
+                    json!({"call_id":call_id,"request_id":request_id,"accepted":accepted}),
+                );
+            });
+        };
         let request = self.api.process(request);
         tokio::pin!(request);
         let mut hold_report = None;
+        if supersedable && self.outdated(Some(trigger.revision)) {
+            supersede(&self);
+        }
         let result = loop {
             tokio::select! {biased;
-                _=revision.changed(),if hold_report.is_none()=>{hold_report=Some(hold.end().await.map_err(|e|Error(e.code))?);},
+                _=revision.changed(),if hold_report.is_none()=>{
+                    if supersedable { supersede(&self); }
+                    hold_report=Some(hold.end().await.map_err(|e|Error(e.code))?);
+                },
                 result=&mut request=>break result,
             }
         };
@@ -424,6 +472,19 @@ impl Context {
             Some(v) => v,
             None => hold.end().await.map_err(|e| Error(e.code))?,
         };
+        if let Some(source) = &self.source {
+            // One line per wait: whether the front model spoke while the reply was pending, and why not.
+            for mut wait in source.take_waits().await {
+                wait["call_id"] = json!(self.config.start.call_id);
+                wait["fillers_played"] = json!(held.fillers_played);
+                vogon_observability::emit(
+                    vogon_observability::Level::Info,
+                    "orchestration",
+                    "front_wait",
+                    wait,
+                );
+            }
+        }
         let response = match result {
             Ok(r) => r,
             Err(e) if e.0 == "turn_service_unavailable" => {
@@ -462,15 +523,20 @@ impl Context {
         interrupted: bool,
     ) -> Result<Option<String>> {
         let held = response.speak.iter().any(|c| c.play_after == "line_quiet");
-        if (!held
-            && (!self.authorize(revision).await
-                || self.outdated(revision)
-                || generation.is_some() && self.port.generation().await? != generation))
-            || (interrupted && response.action == "continue" && !response.speak.is_empty())
-        {
+        // Why a finished reply is not played, in the order the checks are made.
+        let discard = if !held && (!self.authorize(revision).await || self.outdated(revision)) {
+            Some("caller_spoke_again")
+        } else if !held && generation.is_some() && self.port.generation().await? != generation {
+            Some("playback_superseded")
+        } else if interrupted && response.action == "continue" && !response.speak.is_empty() {
+            Some("filler_interrupted")
+        } else {
+            None
+        };
+        if let Some(reason) = discard {
             self.shared.stale.fetch_add(1, Ordering::Relaxed);
             for command in response.speak {
-                self.truncated(&command);
+                self.truncated(&command, reason);
             }
             return Ok(None);
         }
@@ -482,7 +548,7 @@ impl Context {
         }
         for command in response.speak {
             if !held && (!self.authorize(revision).await || self.outdated(revision)) {
-                self.truncated(&command);
+                self.truncated(&command, "caller_spoke_again");
                 continue;
             }
             self.client(
@@ -491,7 +557,7 @@ impl Context {
             )
             .await?;
             if !held && (!self.authorize(revision).await || self.outdated(revision)) {
-                self.truncated(&command);
+                self.truncated(&command, "caller_spoke_again");
                 continue;
             }
             self.deliver(command, generation, false).await?;
@@ -539,8 +605,16 @@ impl Context {
         }
         Ok(end)
     }
-    fn truncated(&self, command: &SpeakCommand) {
-        self.shared.fact(json!({"kind":"delivery_outcome","audio_id":command.audio_id,"status":"truncated","sentences_total":0,"sentences_sent":0,"heard_text":"","at":self.shared.clock.now()}));
+    /// A reply that is dropped before any of it is sent: the caller heard none of it, and the
+    /// report says so (a fraction of zero, not an unknown amount). Logged when it happens.
+    fn truncated(&self, command: &SpeakCommand, reason: &'static str) {
+        vogon_observability::emit(
+            vogon_observability::Level::Warn,
+            "orchestration",
+            "reply_discarded",
+            json!({"call_id":self.config.start.call_id,"audio_id":command.audio_id,"reason":reason,"words":command.text.split_whitespace().count()}),
+        );
+        self.shared.fact(json!({"kind":"delivery_outcome","audio_id":command.audio_id,"status":"truncated","sentences_total":0,"sentences_sent":0,"heard_text":"","heard_fraction":0.0,"chunks_sent":0,"audio_ms":0.0,"at":self.shared.clock.now()}));
     }
     async fn deliver(
         &self,

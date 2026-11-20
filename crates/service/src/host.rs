@@ -80,6 +80,31 @@ impl Service {
             })
             .ok()
         };
+        if config.settings["front_model_enabled"] == true {
+            let missing = if clients.front.is_none() {
+                "cerebras_api_key_missing"
+            } else if path.is_empty() {
+                "front_config_path_unset"
+            } else if artifact.as_ref().is_none_or(|a| a.prompt.is_empty()) {
+                "front_config_unusable"
+            } else if config.settings["front_engine"] == "jev" && clients.jev.is_none() {
+                "open_router_api_key_missing"
+            } else {
+                ""
+            };
+            if missing.is_empty() {
+                emit(Level::Info, "service", "front_model_ready", json!({}));
+            } else {
+                // The front model is asked for but cannot run: every wait is silent unless the
+                // call's own stock phrases are enabled. Say so once, at startup.
+                emit(
+                    Level::Warn,
+                    "service",
+                    "front_model_inactive",
+                    json!({"code":missing}),
+                );
+            }
+        }
         let transfer_store = if config.gateway["session_store"] == "redis" {
             vogon_escalation::Store::redis_mode(
                 config.settings["redis_url"].as_str().unwrap_or(""),

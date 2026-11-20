@@ -17,6 +17,12 @@ pub trait TurnApi: Send + Sync + 'static {
     fn process(&self, request: ProcessEventsRequest) -> Future<'_, ProcessEventsResponse>;
     /// Flush remaining facts and finalize once; implementations may retry the same body.
     fn end(&self, request: EndCallRequest) -> Future<'_, EndCallResponse>;
+    /// The caller spoke again while `request_id` is still unanswered: its reply can no longer be
+    /// played. A hint, sent beside the pending request and never in its place; a turn service
+    /// that does not know it loses nothing but the earlier answer to the caller's next words.
+    fn supersede(&self, _call_id: String, _request_id: String) -> Future<'_, ()> {
+        boxed(async { Ok(()) })
+    }
 }
 /// Validated deployment/per-call binding, including the FULL .../turn/v1 root.
 #[derive(Clone)]
@@ -240,6 +246,26 @@ impl TurnApi for HttpTurnClient {
         boxed(async move {
             self.post("end_call", json!(r), "EndCallResponse", true)
                 .await
+        })
+    }
+    fn supersede(&self, call_id: String, request_id: String) -> Future<'_, ()> {
+        boxed(async move {
+            // Outside the ordering lock on purpose: the request it is about is holding it.
+            // One attempt, short deadline: a lost hint only costs the wait it would have saved.
+            let request = self
+                .http
+                .post(format!("{}/supersede", self.config.base_url))
+                .json(&json!({"call_id":call_id,"request_id":request_id}))
+                .timeout(Duration::from_secs(2));
+            let request = if self.config.api_key.is_empty() {
+                request
+            } else {
+                request.bearer_auth(&self.config.api_key)
+            };
+            match request.send().await {
+                Ok(r) if r.status().is_success() => Ok(()),
+                _ => Err(Error::new("turn_supersede_not_accepted")),
+            }
         })
     }
 }

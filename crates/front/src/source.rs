@@ -27,6 +27,12 @@ pub struct State {
     pub primed: String,
     pub result: Option<String>,
     pub pending: bool,
+    /// What the model read on the current caller text, kept for the wait record.
+    pub read_note: Value,
+    /// Why the last `admit` refused a line; empty when it admitted one.
+    pub refused: String,
+    /// One record per finished wait: whether a line was spoken and the reason. Drained by the host.
+    pub waits: Vec<Value>,
     pools: BTreeMap<String, Vec<String>>,
     last: BTreeMap<String, String>,
     rng: rand::rngs::StdRng,
@@ -72,12 +78,37 @@ impl State {
             primed: String::new(),
             result: None,
             pending: false,
+            read_note: Value::Null,
+            refused: String::new(),
+            waits: vec![],
             pools: BTreeMap::new(),
             last: BTreeMap::new(),
             rng: rand::rngs::StdRng::seed_from_u64(seed),
             last_line_t: 0.,
             n: 0,
         }
+    }
+    /// Close one wait: record whether `line` was admitted, where it came from and, when
+    /// nothing is said, why. `source` names the branch that ended the wait.
+    pub fn settle(
+        &mut self,
+        source: &str,
+        line: (String, String),
+        started: Instant,
+    ) -> (String, String) {
+        let spoke = !line.0.is_empty();
+        let reason = if spoke || self.refused.is_empty() {
+            source.to_owned()
+        } else {
+            format!("{source}:{}", self.refused)
+        };
+        let mut record = serde_json::json!({"outcome":if spoke {"spoke"} else {"silent"},"reason":reason,"audio_id":line.1,"decided_after_ms":started.elapsed().as_millis() as u64});
+        if let (Some(record), Some(note)) = (record.as_object_mut(), self.read_note.as_object()) {
+            record.extend(note.clone());
+        }
+        self.refused.clear();
+        self.waits.push(record);
+        line
     }
     /// Increment a per-call decision counter.
     pub fn bump(&mut self, key: &str) {
@@ -127,6 +158,7 @@ impl State {
         }
         self.primed = text.into();
         self.result = None;
+        self.read_note = Value::Null;
         self.pending = true;
         self.deliberate_silence = false;
         Some(self.generation)
@@ -169,6 +201,7 @@ impl State {
             return false;
         }
         self.pending = false;
+        self.read_note = serde_json::json!({"move":read.movement,"confidence":read.confidence,"read_ms":read.latency_ms.round(),"read_error":read.error});
         if !read.error.is_empty() {
             self.bump("front_error");
             self.result = Some(String::new());
@@ -191,6 +224,8 @@ impl State {
                 reason: "rider:repeat_disabled".into(),
             };
         }
+        self.read_note["tier"] = Value::String(pick.tier.clone());
+        self.read_note["pick_reason"] = Value::String(pick.reason.clone());
         if pick.text.is_empty() {
             self.deliberate_silence = pick.reason.starts_with("rider:");
             self.bump("front_empty");
@@ -234,11 +269,14 @@ impl State {
     }
     /// Apply min-gap and structural guards and mint an audio ID; does not mark playback heard.
     pub fn admit(&mut self, text: &str, now: f64) -> (String, String) {
+        self.refused.clear();
         if text.is_empty() {
+            self.refused = "no_line_available".into();
             return (String::new(), String::new());
         }
         if self.last_line_t != 0. && now - self.last_line_t < self.settings.min_gap_sec {
             self.bump("front_guard_gap");
+            self.refused = "too_soon_after_last_line".into();
             return (String::new(), String::new());
         }
         let trips = guard::check(
@@ -251,9 +289,13 @@ impl State {
             },
         );
         if !trips.is_empty() {
+            let mut names = vec![];
             for t in trips {
-                self.bump(&format!("front_guard_{}", t.split(':').next().unwrap()));
+                let name = t.split(':').next().unwrap().to_owned();
+                self.bump(&format!("front_guard_{name}"));
+                names.push(name);
             }
+            self.refused = format!("line_guard:{}", names.join("+"));
             return (String::new(), String::new());
         }
         self.n += 1;
@@ -415,27 +457,37 @@ impl Source {
             let mut state = self.inner.state.lock().await;
             if state.generation != generation {
                 state.bump("front_beat_withheld");
-                return (String::new(), String::new());
+                return state.settle("caller_spoke_again", (String::new(), String::new()), start);
             }
             let elapsed = start.elapsed().as_secs_f64();
             if let Some(text) = state.result.clone() {
                 if !text.is_empty() {
-                    return state.admit(&text, self.inner.clock.now());
+                    let line = state.admit(&text, self.inner.clock.now());
+                    return state.settle("model_line", line, start);
                 }
                 if state.deliberate_silence {
                     state.bump("front_silent_on_purpose");
-                    return (String::new(), String::new());
+                    return state.settle(
+                        "model_chose_silence",
+                        (String::new(), String::new()),
+                        start,
+                    );
                 }
                 if empty_s.is_none_or(|d| elapsed >= d.max(0.)) {
                     let beat = state.beat("hold");
-                    return state.admit(&beat, self.inner.clock.now());
+                    let line = state.admit(&beat, self.inner.clock.now());
+                    return state.settle("stock_line_after_empty_read", line, start);
                 }
             } else if !state.pending || elapsed >= deadline_s.max(0.) {
-                if state.pending {
+                let source = if state.pending {
                     state.bump("front_late");
-                }
+                    "stock_line_model_late"
+                } else {
+                    "stock_line_no_read"
+                };
                 let beat = state.beat("hold");
-                return state.admit(&beat, self.inner.clock.now());
+                let line = state.admit(&beat, self.inner.clock.now());
+                return state.settle(source, line, start);
             }
             let deadline = if state.result.is_some() {
                 empty_s.unwrap_or(0.)
@@ -448,9 +500,15 @@ impl Source {
     }
     /// Admit at most one follow-up waiting line when the hold asks for it.
     pub async fn wait_line(&self) -> (String, String) {
+        let start = Instant::now();
         let mut s = self.inner.state.lock().await;
         let text = s.beat("wait");
-        s.admit(&text, self.inner.clock.now())
+        let line = s.admit(&text, self.inner.clock.now());
+        s.settle("second_stock_line", line, start)
+    }
+    /// Hand the finished wait records to the host and forget them.
+    pub async fn take_waits(&self) -> Vec<Value> {
+        std::mem::take(&mut self.inner.state.lock().await.waits)
     }
     /// Update the ledger only after the host's speech path returns a delivery result.
     pub async fn note_played(&self, text: &str) {
