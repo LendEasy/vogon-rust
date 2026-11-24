@@ -731,3 +731,92 @@ async fn flux_audio_is_indexed_by_ended_turns_and_a_cancel_interrupts_every_turn
     client.close().await;
     assert_eq!(server.await.unwrap(), 3);
 }
+
+/// A scripted Speak v1 server with the provider's flush budget: per connection, the first
+/// `budget` flushes are spoken and every later one is refused with the provider's warning.
+async fn budgeted_server(listener: TcpListener, connections: usize, budget: usize) -> Vec<usize> {
+    let mut spoken = vec![];
+    for _ in 0..connections {
+        let mut socket = accept_async(listener.accept().await.unwrap().0)
+            .await
+            .unwrap();
+        let mut flushes = 0;
+        while let Some(Ok(message)) = socket.next().await {
+            let Message::Text(text) = message else {
+                continue;
+            };
+            let value: Value = serde_json::from_str(&text).unwrap();
+            if value["type"] != "Flush" {
+                continue;
+            }
+            flushes += 1;
+            if flushes > budget {
+                let warning = json!({"type":"Warning","warn_code":"EXCESSIVE_FLUSH"});
+                let _ = socket.send(Message::Text(warning.to_string().into())).await;
+                continue;
+            }
+            let _ = socket.send(Message::Binary(vec![1; 320].into())).await;
+            let flushed = json!({"type":"Flushed"}).to_string();
+            let _ = socket.send(Message::Text(flushed.into())).await;
+        }
+        spoken.push(flushes.min(budget));
+    }
+    spoken
+}
+async fn finished(stream: &mut tokio::sync::mpsc::UnboundedReceiver<TtsOutput>) -> usize {
+    let mut chunks = 0;
+    loop {
+        match timeout(Duration::from_secs(2), stream.recv()).await {
+            Ok(Some(TtsOutput::Audio { .. })) => chunks += 1,
+            Ok(Some(TtsOutput::Finished)) => return chunks,
+            other => panic!("the utterance did not finish: {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn an_utterance_past_the_flush_budget_is_spoken_on_a_fresh_connection() {
+    // The production defect: four five-sentence replies inside a minute, the last of them
+    // refused in silence. Twenty flushes fit one connection; the fifth reply opens another.
+    let (listener, url) = listen().await;
+    let server = tokio::spawn(budgeted_server(listener, 2, 20));
+    let mut client = TtsClient::connect(&url, TtsConfig::default(), key(), Clock::default())
+        .await
+        .unwrap();
+    let reply = || (0..5).map(|n| format!("Sentence {n}.")).collect::<Vec<_>>();
+    for _ in 0..5 {
+        let mut stream = client.stream_segments(reply()).await.unwrap();
+        assert_eq!(finished(&mut stream).await, 5);
+    }
+    client.close().await;
+    assert_eq!(server.await.unwrap(), [20, 5]);
+}
+
+#[tokio::test]
+async fn a_refused_flush_fails_the_utterance_at_once_instead_of_waiting() {
+    // The budget is the provider's to change: if it refuses a flush anyway, the utterance
+    // fails with a tts_ error (the caller reconnects and speaks what was missed).
+    let (listener, url) = listen().await;
+    let server = tokio::spawn(budgeted_server(listener, 1, 1));
+    let mut client = TtsClient::connect(&url, TtsConfig::default(), key(), Clock::default())
+        .await
+        .unwrap();
+    let mut stream = client
+        .stream_segments(vec!["Heard.".into(), "Refused.".into()])
+        .await
+        .unwrap();
+    let mut failure = None;
+    while let Some(event) = timeout(Duration::from_secs(2), stream.recv())
+        .await
+        .expect("a refused flush must not leave the utterance waiting")
+    {
+        if let TtsOutput::Failed { error } = event {
+            failure = Some(error.code.to_string());
+            break;
+        }
+    }
+    assert_eq!(failure.as_deref(), Some("tts_flush_limit"));
+    assert!(!client.is_open() || client.stream("next".into()).await.is_err());
+    client.close().await;
+    server.await.unwrap();
+}

@@ -9,6 +9,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::collections::VecDeque;
 use tokio::{
     sync::{mpsc, oneshot},
     task::JoinHandle,
@@ -19,6 +20,9 @@ use vogon_clocks::Clock;
 
 pub const STT_ENDPOINT: &str = "wss://api.deepgram.com/v2/listen";
 pub const TTS_ENDPOINT: &str = "wss://api.deepgram.com/v1/speak";
+/// Speak v1 accepts this many Flush messages per connection in any window of this length.
+const FLUSH_LIMIT: usize = 20;
+const FLUSH_WINDOW_SEC: f64 = 60.0;
 /// Speak v2, the socket Deepgram's Flux voices are served on.
 pub const FLUX_TTS_ENDPOINT: &str = "wss://api.deepgram.com/v2/speak";
 /// The socket a voice is spoken on: a Flux voice asked of the default Speak endpoint goes to
@@ -352,7 +356,16 @@ impl TtsClient {
         let mut socket = Socket::connect_retry(&endpoint, &config.query(), &key, &retry).await?;
         let (tx, mut commands) = mpsc::channel::<TtsCommand>(64);
         let actor_clock = clock.clone();
+        // Speak v1 (Aura) refuses the 21st Flush on one connection inside a minute: it answers
+        // with a Warning (EXCESSIVE_FLUSH), speaks nothing and sends no Flushed, so an utterance
+        // waiting on that Flushed waited for ever (a call went silent for six minutes after four
+        // interrupted replies in a row). The budget belongs to the connection, so an utterance
+        // that would overrun it is spoken on a fresh one, opened before its first word is sent.
+        // Measured 2026-11-24 on the bare socket; Speak v2 took 40 flushes in 45 s unrefused.
+        let (fresh_endpoint, fresh_query, fresh_key, fresh_retry) =
+            (endpoint.clone(), config.query(), key.clone(), retry.clone());
         let task = tokio::spawn(async move {
+            let mut flushed: VecDeque<f64> = VecDeque::new();
             let mut active: Option<Active> = None;
             let mut cancel: Option<(f64, oneshot::Sender<CancelOutcome>)> = None;
             // Flux turns sent (text + flush) whose end the provider has not yet announced.
@@ -369,10 +382,22 @@ impl TtsClient {
                             if active.is_some()||cancel.is_some(){let _=ack.send(Err(Error::new("tts_busy")));continue;}
                             if segments.is_empty(){let _=output.send(TtsOutput::Finished);let _=ack.send(Ok(()));continue;}
                             let count=segments.len();
+                            if !flux{
+                                let now=actor_clock.now();
+                                while flushed.front().is_some_and(|at|now-at>=FLUSH_WINDOW_SEC){flushed.pop_front();}
+                                if flushed.len()+count>FLUSH_LIMIT{
+                                    let _=socket.writer.send(Message::Close(None)).await;
+                                    match Socket::connect_retry(&fresh_endpoint,&fresh_query,&fresh_key,&fresh_retry).await{
+                                        Ok(fresh)=>{socket=fresh;flushed.clear();},
+                                        Err(e)=>{let _=ack.send(Err(e));break;},
+                                    }
+                                }
+                            }
                             let state=TtsState::new(count,actor_clock.now());let mut sent=Ok(());
                             for text in segments{
                                 if let Err(e)=socket.writer.send(Message::Text(json!({"type":"Speak","text":text}).to_string().into())).await{sent=Err(e);break;}
                                 if let Err(e)=socket.writer.send(Message::Text(json!({"type":"Flush"}).to_string().into())).await{sent=Err(e);break;}
+                                flushed.push_back(actor_clock.now());
                             }
                             if sent.is_ok(){active=Some(Active{state,output});if flux{owed+=count;}}let failed=sent.is_err();let _=ack.send(sent);if failed{break;}
                         },
@@ -399,6 +424,13 @@ impl TtsClient {
                                         if owed==0{if let Some((_,ack))=cancel.take(){let _=ack.send(CancelOutcome::Cleared);}}
                                         else if socket.writer.send(Message::Text(json!({"type":"Interrupt"}).to_string().into())).await.is_err(){break;}
                                     } else if let Some(current)=active.as_mut(){current.state.control("Flushed");if current.state.done(){let finished=active.take().unwrap();let _=finished.output.send(TtsOutput::Finished);}}
+                                },
+                                // The provider refused a flush: nothing more will be spoken on this connection for
+                                // now, and no Flushed is coming. Fail the utterance at once so the caller's recovery
+                                // (reconnect, speak what was missed) runs instead of a wait with no end.
+                                Some("Warning") if cancel.is_none()&&value["warn_code"]=="EXCESSIVE_FLUSH"=>{
+                                    if let Some(old)=active.take(){let _=old.output.send(TtsOutput::Failed{error:Error::new("tts_flush_limit")});}
+                                    break;
                                 },
                                 Some("Warning") if flux&&cancel.is_some()=>{
                                     time::sleep(Duration::from_millis(20)).await;
