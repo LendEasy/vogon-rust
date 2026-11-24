@@ -42,6 +42,7 @@ pub struct GatewaySettings {
     pub stt_feed_mode: String,
     pub tts_pacing_mode: String,
     pub tts_buffer_lead_ms: i64,
+    pub tts_first_audio_timeout_ms: i64,
     pub tts_phone_encoding: String,
     pub tts_phone_sample_rate: i64,
     pub barge_controller_enabled: bool,

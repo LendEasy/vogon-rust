@@ -504,6 +504,16 @@ impl Context {
             {
                 self.shared.stale.fetch_add(1, Ordering::Relaxed);
             }
+            // The one thing an eager reply may carry: the turn service's line for the wait. The
+            // source holds it for the final's hold and drops it if the caller carried on.
+            if let Some(source) = &self.source {
+                source
+                    .offer(
+                        trigger.event["text"].as_str().unwrap_or(""),
+                        response.filler.as_deref().unwrap_or(""),
+                    )
+                    .await;
+            }
             // Eager is never a commit. Even an anomalous eager payload cannot speak/end/escalate.
             return Ok(None);
         }

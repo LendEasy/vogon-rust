@@ -25,6 +25,11 @@ pub struct State {
     pub deliberate_silence: bool,
     pub generation: u64,
     pub primed: String,
+    /// When the first end-of-turn signal for the current utterance arrived: the hold's deadlines
+    /// run from here, not from the final that opens the hold.
+    pub primed_at: Option<Instant>,
+    /// A hold has already run on that clock; the next utterance starts a new one.
+    pub clock_used: bool,
     pub result: Option<String>,
     pub pending: bool,
     /// What the model read on the current caller text, kept for the wait record.
@@ -76,6 +81,8 @@ impl State {
             deliberate_silence: false,
             generation: 0,
             primed: String::new(),
+            primed_at: None,
+            clock_used: false,
             result: None,
             pending: false,
             read_note: Value::Null,
@@ -148,8 +155,14 @@ impl State {
         if !text.is_empty() && text != self.primed {
             self.generation += 1;
         }
+        if !text.is_empty() && (text != self.primed || self.clock_used) {
+            self.primed_at = Some(Instant::now());
+            self.clock_used = false;
+        }
         let enabled = match self.settings.engine.as_str() {
             "off" => false,
+            // The turn service composes: the line is a promise until `offer` keeps it.
+            "turn" => true,
             "jev" => self.artifact.can_read_moves(),
             _ => !self.artifact.prompt.is_empty(),
         };
@@ -162,6 +175,25 @@ impl State {
         self.pending = true;
         self.deliberate_silence = false;
         Some(self.generation)
+    }
+    /// Take the turn service's line for `text` (its reply to the early end-of-turn signal;
+    /// empty: it has none). Refused unless that text is still the one being waited on: a
+    /// caller who carried on has been primed with new words, and a line for the old ones
+    /// must not play.
+    pub fn offer(&mut self, text: &str, line: &str) -> bool {
+        if self.settings.engine != "turn" || text != self.primed || !self.pending {
+            return false;
+        }
+        self.pending = false;
+        let line = line.trim();
+        self.bump(if line.is_empty() {
+            "front_empty"
+        } else {
+            "front_generated"
+        });
+        self.read_note = serde_json::json!({"offered":line});
+        self.result = Some(line.into());
+        true
     }
     /// Invalidate every outstanding result and hold waiter when caller speech resumes.
     pub fn cancel(&mut self) {
@@ -195,7 +227,8 @@ impl State {
         self.bump(&format!("beat_{kind}"));
         text
     }
-    /// Accept a Jev read only for the current generation; reasoned silence prevents fallback beats.
+    /// Accept a Jev read only for the current generation. Only distress or a goodbye prevents the
+    /// fallback beat; every other silent pick still gets it at the hold's deadline.
     pub fn complete_read(&mut self, generation: u64, mut read: moves::Read) -> bool {
         if generation != self.generation || !self.pending {
             return false;
@@ -227,7 +260,8 @@ impl State {
         self.read_note["tier"] = Value::String(pick.tier.clone());
         self.read_note["pick_reason"] = Value::String(pick.reason.clone());
         if pick.text.is_empty() {
-            self.deliberate_silence = pick.reason.starts_with("rider:");
+            self.deliberate_silence =
+                [moves::DISTRESS_SILENCE, moves::CLOSING_SILENCE].contains(&pick.reason.as_str());
             self.bump("front_empty");
         } else {
             self.bump(&format!("front_{}", pick.tier));
@@ -382,6 +416,12 @@ impl Source {
             old.abort();
         }
         let engine = state.settings.engine.clone();
+        if engine == "turn" {
+            // Nothing is asked here: the turn service's reply to the early signal brings the line.
+            drop(state);
+            self.inner.notify.notify_waiters();
+            return;
+        }
         let system = state.system.clone();
         let user = state.user_message(text);
         let effort = state.settings.model_effort.clone();
@@ -436,6 +476,11 @@ impl Source {
         }));
         self.inner.notify.notify_waiters();
     }
+    /// Hand over the turn service's line for the utterance `text` and wake a hold waiting on it.
+    pub async fn offer(&self, text: &str, line: &str) {
+        self.inner.state.lock().await.offer(text, line);
+        self.inner.notify.notify_waiters();
+    }
     /// Invalidate pending speech immediately and abort its HTTP request/retry task.
     pub async fn cancel(&self) {
         let mut task = self.task.lock().await;
@@ -447,9 +492,18 @@ impl Source {
         self.inner.notify.notify_waiters();
     }
     /// Await model text or a fallback beat; supersession cancels this hold's output.
+    /// Both deadlines run from the first end-of-turn signal for this utterance, so a hold that
+    /// opens after a deadline has passed gets its beat at once.
     pub async fn hold_line(&self, deadline_s: f64, empty_s: Option<f64>) -> (String, String) {
-        let start = Instant::now();
-        let generation = self.inner.state.lock().await.generation;
+        let (start, generation) = {
+            let mut state = self.inner.state.lock().await;
+            let start = match state.primed_at {
+                Some(at) if !state.clock_used => at,
+                _ => Instant::now(),
+            };
+            state.clock_used = true;
+            (start, state.generation)
+        };
         loop {
             let changed = self.inner.notify.notified();
             tokio::pin!(changed);

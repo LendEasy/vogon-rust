@@ -97,7 +97,7 @@
       }
     },
     "jev_model": {
-      "default": "typesafe/jev-1.13",
+      "default": "typesafe/jev-1.14",
       "hint": {
         "scalar": "str"
       }
@@ -218,6 +218,12 @@
     },
     "tts_buffer_lead_ms": {
       "default": 500,
+      "hint": {
+        "scalar": "int"
+      }
+    },
+    "tts_first_audio_timeout_ms": {
+      "default": 800,
       "hint": {
         "scalar": "int"
       }
@@ -421,13 +427,13 @@
       }
     },
     "front_beat_after_ms": {
-      "default": 900,
+      "default": 2500,
       "hint": {
         "scalar": "int"
       }
     },
     "front_beat_after_empty_ms": {
-      "default": 1500,
+      "default": 2500,
       "hint": {
         "scalar": "int"
       }
@@ -451,7 +457,7 @@
       }
     },
     "front_engine": {
-      "default": "jev",
+      "default": "turn",
       "hint": {
         "scalar": "str"
       }

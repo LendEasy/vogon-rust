@@ -51,6 +51,9 @@ pub struct Config {
     pub policy: floor::Transport,
     /// Maximum sentence-stream buffering lead in milliseconds.
     pub lead_ms: f64,
+    /// How long a line's first attempt waits for the speech service's first audio before the
+    /// socket is replaced and the line spoken again; zero waits as long as it takes.
+    pub first_audio_ms: u64,
     /// Delay before typing ambience starts during an accepted response gap.
     pub typing_delay_ms: u64,
     /// Optional alternative listener; None selects Deepgram. Testing is deferred.
@@ -79,6 +82,7 @@ impl Default for Config {
             floor: floor::Config::default(),
             policy: floor::Transport::default(),
             lead_ms: 500.0,
+            first_audio_ms: 800,
             typing_delay_ms: 0,
             live: None,
             judge: None,
@@ -121,6 +125,9 @@ impl Config {
             .map_err(|_| Error::new("invalid_floor_config"))?;
         cfg.lead_ms = settings["tts_buffer_lead_ms"]
             .as_f64()
+            .ok_or_else(|| Error::new("invalid_transport_settings"))?;
+        cfg.first_audio_ms = settings["tts_first_audio_timeout_ms"]
+            .as_u64()
             .ok_or_else(|| Error::new("invalid_transport_settings"))?;
         cfg.audio.encoding = settings["tts_phone_encoding"]
             .as_str()

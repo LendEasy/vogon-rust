@@ -61,7 +61,7 @@ impl Clients {
                     model: text("front_model", "qwen-3.8-27b"),
                     timeout_ms: settings["front_beat_after_ms"]
                         .as_u64()
-                        .unwrap_or(900)
+                        .unwrap_or(2500)
                         .max(200),
                 }),
                 Some(judge::Client {
@@ -76,7 +76,8 @@ impl Clients {
         };
         Ok(Self { jev, front, judge })
     }
-    /// Match existing source enablement, including its Cerebras-key prerequisite for Jev.
+    /// Match existing source enablement, including its Cerebras-key prerequisite for the engines
+    /// that ask a model here (jev, llm); the turn engine needs only the artifact's beats.
     /// Missing/invalid artifacts should be represented as None by the host after reporting the load error.
     pub fn source(
         &self,
@@ -86,15 +87,18 @@ impl Clients {
         clock: Clock,
         seed: u64,
     ) -> Result<Option<Source>> {
-        if gateway["front_model_enabled"] == false || self.front.is_none() {
+        let settings = Settings::from_gateway(gateway)?;
+        // "turn": the turn service composes the line, so no model key and no prompt are needed here.
+        let composed_here = settings.engine != "turn";
+        if gateway["front_model_enabled"] == false || (composed_here && self.front.is_none()) {
             return Ok(None);
         }
-        let Some(artifact) = artifact.filter(|a| !a.prompt.is_empty()) else {
+        let Some(artifact) = artifact.filter(|a| !composed_here || !a.prompt.is_empty()) else {
             return Ok(None);
         };
         let state = State::new(
             artifact,
-            Settings::from_gateway(gateway)?,
+            settings,
             identity.agent,
             identity.lender,
             identity.borrower,

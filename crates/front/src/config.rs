@@ -103,14 +103,14 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            engine: "jev".into(),
+            engine: "turn".into(),
             model_effort: "none".into(),
             max_words: 12,
             min_gap_sec: 6.,
             move_floor: 0.45,
             repeat_enabled: true,
-            beat_after_ms: 900,
-            beat_after_empty_ms: 1500,
+            beat_after_ms: 2500,
+            beat_after_empty_ms: 2500,
             wait_again_after_ms: 2500,
         }
     }

@@ -817,6 +817,89 @@ async fn phone_retry_reconnects_and_keeps_both_attempts_in_watchdog() {
     tt.await.unwrap();
 }
 
+/// Live call voice-eval-f1a71aa2, 2026-11-24: a filler's text was sent on the open speech socket
+/// and its first audio came back 3,923 ms later, with nothing bounding the wait. A speech service
+/// that sends no audio within the limit loses the line to a fresh socket: the whole line again and
+/// no apology (the caller heard nothing of the first attempt).
+#[tokio::test]
+async fn phone_line_with_no_first_audio_is_spoken_on_a_fresh_socket() {
+    let (sl, su) = listen().await;
+    let (tl, tu) = listen().await;
+    let st = tokio::spawn(stt_server(sl, false));
+    let spoken = Arc::new(Mutex::new(Vec::<String>::new()));
+    let captured = spoken.clone();
+    let tt = tokio::spawn(async move {
+        // the first socket takes the line and sends nothing back
+        let mut silent = accept_async(tl.accept().await.unwrap().0).await.unwrap();
+        while let Some(Ok(message)) = silent.next().await {
+            if let Message::Text(text) = message {
+                let value: Value = serde_json::from_str(&text).unwrap();
+                if value["type"] == "Speak" {
+                    captured.lock().await.push(value["text"].as_str().unwrap().into());
+                }
+            }
+        }
+        drop(silent);
+        let mut next = accept_async(tl.accept().await.unwrap().0).await.unwrap();
+        while let Some(Ok(Message::Text(text))) = next.next().await {
+            let value: Value = serde_json::from_str(&text).unwrap();
+            match value["type"].as_str() {
+                Some("Speak") => captured.lock().await.push(value["text"].as_str().unwrap().into()),
+                Some("Flush") => {
+                    next.send(Message::Binary(vec![255; 480].into()))
+                        .await
+                        .unwrap();
+                    next.send(Message::Text(json!({"type":"Flushed"}).to_string().into()))
+                        .await
+                        .unwrap();
+                }
+                Some("Clear") => {
+                    next.send(Message::Text(json!({"type":"Cleared"}).to_string().into()))
+                        .await
+                        .unwrap();
+                }
+                _ => {}
+            }
+        }
+    });
+    let frames = Arc::new(Mutex::new(vec![]));
+    let (mut call, _) = Session::connect(
+        Config {
+            first_audio_ms: 150,
+            ..Config::default()
+        },
+        &settings(),
+        Box::new(Capture(frames.clone())),
+        Clock::default(),
+        &su,
+        &tu,
+    )
+    .await
+    .unwrap();
+    call.text(json!({"event":"start","streamSid":"MZ"}))
+        .await
+        .unwrap();
+    let line = "Let me look into that for you.";
+    let report = timeout(
+        Duration::from_secs(3),
+        call.send_response(Response {
+            text: line.into(),
+            audio_id: "front-6".into(),
+            ..Default::default()
+        }),
+    )
+    .await
+    .unwrap()
+    .unwrap()
+    .unwrap();
+    assert_eq!(report.status, "complete");
+    assert_eq!(report.chunks_sent, 3);
+    assert_eq!(*spoken.lock().await, vec![line.to_owned(), line.to_owned()]);
+    call.close().await.unwrap();
+    st.await.unwrap();
+    tt.await.unwrap();
+}
+
 #[test]
 fn validated_snapshot_preserves_provider_and_transport_call_options() {
     let values = vogon_configuration::settings(

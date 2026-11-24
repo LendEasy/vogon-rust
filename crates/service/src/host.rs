@@ -81,11 +81,17 @@ impl Service {
             .ok()
         };
         if config.settings["front_model_enabled"] == true {
-            let missing = if clients.front.is_none() {
+            // "turn": the turn service composes the line, so this process needs no model key and
+            // no prompt, only the artifact's own short lines.
+            let composed_here = config.settings["front_engine"] != "turn";
+            let missing = if composed_here && clients.front.is_none() {
                 "cerebras_api_key_missing"
             } else if path.is_empty() {
                 "front_config_path_unset"
-            } else if artifact.as_ref().is_none_or(|a| a.prompt.is_empty()) {
+            } else if artifact
+                .as_ref()
+                .is_none_or(|a| composed_here && a.prompt.is_empty())
+            {
                 "front_config_unusable"
             } else if config.settings["front_engine"] == "jev" && clients.jev.is_none() {
                 "open_router_api_key_missing"

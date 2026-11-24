@@ -1209,6 +1209,14 @@
           }
         },
         "default": null
+      },
+      "filler": {
+        "hint": {
+          "optional": {
+            "scalar": "str"
+          }
+        },
+        "default": null
       }
     },
     "kind": null

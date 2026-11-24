@@ -24,6 +24,8 @@ fn state() -> State {
         artifact(),
         Settings {
             min_gap_sec: 0.,
+            // these tests are about a read made here; the default engine asks no model
+            engine: "jev".into(),
             ..Default::default()
         },
         "Agent",
@@ -117,15 +119,17 @@ fn generation_idempotence_cancel_and_stale_completion() {
     assert!(s.generation > previous);
 }
 #[test]
-fn deliberate_silence_distress_and_repeat_disabled() {
+fn only_distress_and_a_goodbye_are_silences_no_beat_may_cover() {
     let mut s = state();
-    for rider in [
-        "identity_data",
-        "unintelligible",
-        "closing",
-        "plain_answer",
-        "distress",
-    ] {
+    for rider in ["identity_data", "unintelligible", "plain_answer"] {
+        let token = s.prime(rider).unwrap();
+        let mut r = read();
+        r.riders.insert(rider.into(), 1.);
+        s.complete_read(token, r);
+        assert!(!s.deliberate_silence, "{rider}");
+        assert_eq!(s.result.as_deref(), Some(""));
+    }
+    for rider in ["closing", "distress"] {
         let token = s.prime(rider).unwrap();
         let mut r = read();
         r.riders.insert(rider.into(), 1.);
@@ -143,7 +147,7 @@ fn deliberate_silence_distress_and_repeat_disabled() {
     let mut r = read();
     r.riders.insert("repeat_request".into(), 1.);
     s.complete_read(token, r);
-    assert!(s.deliberate_silence);
+    assert!(!s.deliberate_silence);
 }
 #[test]
 fn admission_gap_boundary_guards_and_played_ledger() {
@@ -322,11 +326,31 @@ async fn supersession_and_cancel_withhold_old_waiters() {
     src.cancel().await;
 }
 #[tokio::test(start_paused = true)]
-async fn reasoned_silence_never_falls_back_and_no_job_uses_beat() {
+async fn only_distress_never_falls_back_and_no_job_uses_beat() {
+    // Call 27138bcc: "They can contact me by phone" read as a plain answer, the desk took about
+    // six seconds, and nothing was said. A silent pick still gets the beat at the empty deadline.
+    for rider in ["plain_answer", "identity_data", "unintelligible"] {
+        let mut s = state();
+        let t = s.prime(rider).unwrap();
+        let mut r = read();
+        r.riders.insert(rider.into(), 1.);
+        s.complete_read(t, r);
+        assert_eq!(
+            source(s).hold_line(1., Some(2.)).await.0,
+            "One moment.",
+            "{rider}"
+        );
+    }
     let mut s = state();
-    let t = s.prime("identity").unwrap();
+    let t = s.prime("goodbye").unwrap();
     let mut r = read();
-    r.riders.insert("identity_data".into(), 1.);
+    r.riders.insert("closing".into(), 1.);
+    s.complete_read(t, r);
+    assert!(source(s).hold_line(1., Some(2.)).await.0.is_empty());
+    let mut s = state();
+    let t = s.prime("distress").unwrap();
+    let mut r = read();
+    r.riders.insert("distress".into(), 1.);
     s.complete_read(t, r);
     let src = source(s);
     assert!(src.hold_line(1., Some(2.)).await.0.is_empty());
@@ -655,4 +679,189 @@ async fn failed_followup_keeps_prior_delivery_count_on_repeated_end() {
     advance(200).await;
     assert_eq!(hold.end().await.unwrap_err().code, "fixture_speaker_failed");
     assert_eq!(hold.end().await.unwrap().fillers_played, 1);
+}
+#[tokio::test(start_paused = true)]
+async fn beat_deadline_runs_from_the_first_end_of_turn_signal() {
+    // The eager end of turn primes the source; the final opens the hold later. The deadline is
+    // measured from the eager, so the wait for the final is not silence added on top of it.
+    let mut s = state();
+    let t = s.prime("They can contact me by phone.").unwrap();
+    s.complete_text(t, Ok(json!({"say":""})));
+    let src = source(s);
+    advance(400).await;
+    src.prime("They can contact me by phone.").await;
+    let copy = src.clone();
+    let task = tokio::spawn(async move { copy.hold_line(0.6, Some(0.6)).await });
+    settle().await;
+    advance(150).await;
+    assert!(!task.is_finished());
+    advance(60).await;
+    assert_eq!(task.await.unwrap().0, "One moment.");
+    // a hold that opens after the deadline has passed gets its beat at once
+    let mut late = state();
+    let t = late.prime("Okay.").unwrap();
+    late.complete_text(t, Ok(json!({"say":""})));
+    let src = source(late);
+    advance(700).await;
+    let copy = src.clone();
+    let task = tokio::spawn(async move { copy.hold_line(0.6, Some(0.6)).await });
+    settle().await;
+    assert_eq!(task.await.unwrap().0, "One moment.");
+    // the same words on the next turn start a new clock
+    src.prime("Okay.").await;
+    let copy = src.clone();
+    let task = tokio::spawn(async move { copy.hold_line(0.6, Some(0.6)).await });
+    settle().await;
+    advance(500).await;
+    assert!(!task.is_finished());
+    advance(150).await;
+    task.await.unwrap();
+}
+#[test]
+fn the_read_earns_silence_or_a_lookup_line_and_nothing_else() {
+    // The live miss, pinned: "No, I'm not paying today." read as OFFER used to earn a look-up
+    // line, and "Hello?" read as a repeat request an apology. The predicted move and the retired
+    // riders now change nothing; only a confident needs_lookup speaks.
+    let tiers: std::collections::BTreeMap<String, Vec<String>> = [
+        (
+            "lookup".to_owned(),
+            vec!["Let me find that for you.".to_owned()],
+        ),
+        ("beat".to_owned(), vec!["Taking a look.".to_owned()]),
+        ("repeat".to_owned(), vec!["Sorry about that.".to_owned()]),
+        (
+            "courtesy".to_owned(),
+            vec!["Thanks for letting me know.".to_owned()],
+        ),
+    ]
+    .into();
+    let pick = |movement: &str, riders: &[(&str, f64)]| {
+        let mut r = read();
+        r.movement = movement.into();
+        r.riders = riders.iter().map(|(k, v)| ((*k).to_owned(), *v)).collect();
+        vogon_front::moves::pick(&r, &tiers, |_, pool| pool[0].clone(), true, 0.45)
+    };
+    for movement in [
+        "OFFER",
+        "FIGURE",
+        "EXPLANATION",
+        "ASSENT",
+        "REFUSAL",
+        "UNSURE",
+    ] {
+        assert_eq!(pick(movement, &[]).tier, "silence", "{movement}");
+        assert_eq!(
+            pick(movement, &[("needs_lookup", 0.9)]).tier,
+            "lookup",
+            "{movement}"
+        );
+    }
+    assert_eq!(pick("FIGURE", &[("needs_lookup", 0.79)]).reason, "no_line");
+    for rider in [
+        "repeat_request",
+        "not_the_borrower",
+        "plain_answer",
+        "identity_data",
+    ] {
+        assert!(pick("FIGURE", &[(rider, 0.95)]).text.is_empty(), "{rider}");
+    }
+    let distress = pick("OFFER", &[("distress", 0.9), ("needs_lookup", 0.95)]);
+    assert_eq!(distress.reason, vogon_front::moves::DISTRESS_SILENCE);
+    let goodbye = pick("THANKS", &[("closing", 0.9), ("needs_lookup", 0.95)]);
+    assert_eq!(goodbye.reason, vogon_front::moves::CLOSING_SILENCE);
+}
+
+fn turn_source() -> Arc<Source> {
+    let artifact = Artifact::from_value(
+        &json!({"must_not_say":["payment"],"beats":{"hold":["One moment."]}}),
+        12,
+    )
+    .unwrap();
+    source(State::new(
+        artifact,
+        Settings {
+            min_gap_sec: 0.,
+            ..Default::default()
+        },
+        "Agent",
+        "Bank",
+        "Alex",
+        4,
+    ))
+}
+#[tokio::test(start_paused = true)]
+async fn the_turn_services_line_plays_the_moment_the_hold_opens() {
+    assert_eq!(Settings::default().engine, "turn");
+    let s = turn_source();
+    s.prime("What's my rate?").await; // the early signal
+    s.offer("What's my rate?", "Let me pull that up for you.")
+        .await;
+    s.prime("What's my rate?").await; // the final: the same words restart nothing
+    let started = time::Instant::now();
+    let line = s.hold_line(2.5, Some(2.5)).await;
+    assert_eq!(
+        line,
+        ("Let me pull that up for you.".into(), "front-1".into())
+    );
+    assert!(started.elapsed() < Duration::from_millis(50));
+}
+#[tokio::test(start_paused = true)]
+async fn a_line_for_words_the_caller_went_on_from_never_plays() {
+    let s = turn_source();
+    s.prime("I can't").await;
+    s.prime("I can't pay today, I lost my job").await;
+    s.offer("I can't", "Let me take a look.").await; // the first early reply, late
+    let started = time::Instant::now();
+    let line = s.hold_line(0.3, Some(0.3)).await;
+    assert_eq!(line.0, "One moment.", "only the timed last resort is left");
+    assert!(started.elapsed() >= Duration::from_millis(300));
+}
+#[tokio::test(start_paused = true)]
+async fn no_line_offered_is_silence_until_the_last_resort() {
+    for offered in [Some(""), None] {
+        let s = turn_source();
+        s.prime("Yes.").await;
+        if let Some(line) = offered {
+            s.offer("Yes.", line).await;
+        }
+        let started = time::Instant::now();
+        let line = s.hold_line(0.3, Some(0.3)).await;
+        assert_eq!(line.0, "One moment.");
+        assert!(started.elapsed() >= Duration::from_millis(300));
+    }
+}
+#[tokio::test(start_paused = true)]
+async fn an_offered_line_is_guarded_and_a_resumed_caller_drops_it() {
+    let s = turn_source();
+    s.prime("I can pay today.").await;
+    s.offer("I can pay today.", "Let me pull up that payment for you.")
+        .await;
+    assert_eq!(
+        s.hold_line(0.3, Some(0.3)).await,
+        (String::new(), String::new()),
+        "a refused line is silence, never swapped for a beat"
+    );
+    let s = turn_source();
+    s.prime("What's my").await;
+    s.offer("What's my", "Let me take a look.").await;
+    s.cancel().await; // the caller resumed
+    s.prime("What's my rate on this?").await;
+    assert_eq!(s.hold_line(0.3, Some(0.3)).await.0, "One moment.");
+}
+#[test]
+fn the_turn_engine_needs_no_model_key_and_no_prompt() {
+    let gateway = json!({"front_model_enabled":true,"front_engine":"turn","front_model_effort":"none","front_max_words":12,"front_min_gap_sec":6.,"front_move_floor":0.45,"front_repeat_enabled":true,"front_beat_after_ms":2500,"front_beat_after_empty_ms":2500,"front_wait_again_after_ms":2500,"cerebras_api_key":""});
+    let clients = Clients::from_settings(&gateway, |_| None).unwrap();
+    let artifact = Artifact::from_value(&json!({"beats":{"hold":["One moment."]}}), 12).unwrap();
+    let identity = Identity {
+        agent: "Agent",
+        lender: "Bank",
+        borrower: "",
+    };
+    assert!(
+        clients
+            .source(&gateway, Some(artifact), identity, Clock::default(), 1)
+            .unwrap()
+            .is_some()
+    );
 }

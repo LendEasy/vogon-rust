@@ -592,6 +592,8 @@ pub struct ProcessEventsResponse {
     pub silence_grace_sec: Option<f64>,
     #[serde(default = "default_processeventsresponse_silence_ladder")]
     pub silence_ladder: Option<String>,
+    #[serde(default = "default_processeventsresponse_filler")]
+    pub filler: Option<String>,
 }
 fn default_processeventsresponse_speak() -> Vec<SpeakCommand> { serde_json::from_str("[]").expect("generated default") }
 fn default_processeventsresponse_action() -> String { serde_json::from_str("\"continue\"").expect("generated default") }
@@ -600,6 +602,7 @@ fn default_processeventsresponse_client_events() -> Vec<ClientEvent> { serde_jso
 fn default_processeventsresponse_escalation() -> Option<EscalationOrder> { serde_json::from_str("null").expect("generated default") }
 fn default_processeventsresponse_silence_grace_sec() -> Option<f64> { serde_json::from_str("null").expect("generated default") }
 fn default_processeventsresponse_silence_ladder() -> Option<String> { serde_json::from_str("null").expect("generated default") }
+fn default_processeventsresponse_filler() -> Option<String> { serde_json::from_str("null").expect("generated default") }
 
 /// Final call reason, remaining events and transport analytics for finalization.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

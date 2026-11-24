@@ -375,7 +375,17 @@ async fn source_drop_cancels_http_and_emits_jev_trace() {
     client.tracer = Some(Arc::new(move |t| sink.lock().unwrap().push(t)));
     let artifact=Artifact::from_value(&json!({"prompt":"Agent","tiers":{"beat":["One moment."]},"move_criteria":{"ASSENT":"agree","REFUSAL":"decline"}}),12).unwrap();
     let src = Source::new(
-        State::new(artifact, Settings::default(), "", "", "", 1),
+        State::new(
+            artifact,
+            Settings {
+                engine: "jev".into(),
+                ..Default::default()
+            },
+            "",
+            "",
+            "",
+            1,
+        ),
         vogon_clocks::Clock::default(),
         Some(client),
         None,

@@ -134,6 +134,14 @@ impl Inner {
             }
             (output?, cancellation, epoch, sid, cleanup)
         };
+        // THE FIRST-AUDIO LIMIT. The first attempt waits this long for the speech service's first
+        // audio and no longer: past it the attempt fails with nothing sent, and the recovery below
+        // (reconnect, the whole line, no apology) runs. Measured 2026-11-24: one line of about 480
+        // got its first audio after 3,923 ms (every other in 83-504 ms) and the caller sat in
+        // silence with the answer ready behind it. The retry is not timed: a second early give-up
+        // would leave the line unspoken, which is worse than a slow one.
+        let mut first_audio_by = (attempt == 0 && self.config.first_audio_ms > 0)
+            .then(|| time::Instant::now() + Duration::from_millis(self.config.first_audio_ms));
         // A clear may arrive while the initial Speak/Flush is being acknowledged.
         // Route that cancellation through normal delivery accounting as well.
         let setup: Result<()> = async {
@@ -170,9 +178,16 @@ impl Inner {
                         biased;
                         _ = cancellation.changed() => return Err(Error::new("playback_cancelled")),
                         event = output.recv() => event.ok_or_else(|| Error::new("tts_disconnected"))?,
+                        _ = async {
+                            match first_audio_by {
+                                Some(at) => time::sleep_until(at).await,
+                                None => std::future::pending().await,
+                            }
+                        } => return Err(Error::new("tts_first_audio_timeout")),
                     };
                     match event {
                         TtsOutput::Audio { chunk } => {
+                            first_audio_by = None;
                             if report.first_chunk_ms.is_none() {
                                 report.first_chunk_ms = chunk.first_chunk_ms;
                             }
@@ -275,6 +290,7 @@ impl Inner {
             self.state.lock().await.playback.sentences = retry_plan.sentences.clone();
             std::mem::swap(&mut plan, &mut retry_plan);
             segment = 0;
+            first_audio_by = None;
             attempt += 1;
         };
         if let Err(error) = result {

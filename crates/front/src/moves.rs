@@ -28,6 +28,7 @@ pub const RIDERS: &[&str] = &[
     "repeat_request",
     "closing",
     "plain_answer",
+    "needs_lookup",
 ];
 /// One model read; failures contain an error and default to UNSURE.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -110,56 +111,44 @@ pub fn questions(criteria: &Value, riders: &Value, question: &str) -> Result<Val
 pub fn state(agent_last: &str, utterance: &str, history: &[(String, String)]) -> Value {
     json!({"agent_just_said":if agent_last.is_empty(){"(the call has just opened)"}else{agent_last},"caller_just_said":utterance,"recent_turns":history.iter().skip(history.len().saturating_sub(6)).map(|(who,what)|format!("{who}: {what}")).collect::<Vec<_>>()})
 }
-/// Select a safe tier using the caller's rotation function; rider ordering is intentional.
+/// The silences the hold's timed beat may not cover: the desk acknowledges distress itself, and
+/// nothing is owed across a goodbye.
+pub const DISTRESS_SILENCE: &str = "rider:distress_defers_to_desk";
+pub const CLOSING_SILENCE: &str = "rider:closing";
+/// A look-up line plays only on a confident yes to the one question the read is trusted with.
+pub const LOOKUP_BAR: f64 = 0.8;
+/// What the read earns: silence, or a look-up line. The read is no longer asked to predict how
+/// the desk's answer will open (decision 2026-11-24): that guess put a look-up line after a
+/// refusal and an apology after "Hello?". Three facts about the CALLER's line are left: a goodbye
+/// and distress are silent with no timed line, a confident `needs_lookup` earns a look-up line,
+/// and everything else picks nothing so the hold's neutral line covers a slow turn.
+/// `has_spoken` and `move_floor` are accepted for the callers that still pass them.
 pub fn pick(
     read: &Read,
     tiers: &BTreeMap<String, Vec<String>>,
     mut rotate: impl FnMut(&str, &[String]) -> String,
-    has_spoken: bool,
-    move_floor: f64,
+    _has_spoken: bool,
+    _move_floor: f64,
 ) -> Pick {
-    let silent = |reason: String| Pick {
+    let silent = |reason: &str| Pick {
         tier: "silence".into(),
         text: String::new(),
-        reason,
+        reason: reason.into(),
     };
-    let mut choose = |tier: &str, reason: String| {
-        tiers.get(tier).filter(|p| !p.is_empty()).map(|p| Pick {
-            tier: tier.into(),
-            text: rotate(tier, p),
-            reason,
-        })
-    };
-    let rider = |name| read.rider(name, 0.5);
-    if rider("repeat_request") {
-        return if has_spoken {
-            choose("repeat", "rider:repeat_request".into())
-        } else {
-            None
-        }
-        .unwrap_or_else(|| silent("rider:repeat_nothing_said".into()));
+    if read.rider("closing", 0.5) {
+        return silent(CLOSING_SILENCE);
     }
-    if rider("identity_data") || rider("unintelligible") || rider("closing") {
-        return silent("rider:silent_class".into());
+    if read.rider("distress", 0.5) {
+        return silent(DISTRESS_SILENCE);
     }
-    if rider("plain_answer") {
-        return silent("rider:plain_answer".into());
-    }
-    if read.movement == "UNSURE" || read.confidence < move_floor {
-        return silent(format!("unsure:{}:{:.2}", read.movement, read.confidence));
-    }
-    if rider("distress") {
-        return silent("rider:distress_defers_to_desk".into());
-    }
-    if rider("not_the_borrower")
-        && let Some(p) = choose("courtesy", "rider:not_the_borrower".into())
+    if read.rider("needs_lookup", LOOKUP_BAR)
+        && let Some(pool) = tiers.get("lookup").filter(|pool| !pool.is_empty())
     {
-        return p;
+        return Pick {
+            tier: "lookup".into(),
+            text: rotate("lookup", pool),
+            reason: "rider:needs_lookup".into(),
+        };
     }
-    if ["FIGURE", "EXPLANATION", "OFFER"].contains(&read.movement.as_str())
-        && let Some(p) = choose("lookup", format!("move:{}", read.movement))
-    {
-        return p;
-    }
-    choose("beat", format!("move:{}", read.movement)).unwrap_or_else(|| silent("no_pool".into()))
+    silent("no_line")
 }

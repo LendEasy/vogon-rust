@@ -66,10 +66,15 @@ commit/cancellation remain module 9's responsibility.
   contains `model`, `state`, `questions`; timeout is a transport option.
 - Cerebras front/judge calls do not retry. Front temperature/max tokens/JSON mode
   and optional reasoning effort retain their original values. Default front
-  timeout follows the 900 ms beat deadline, with a 200 ms minimum; judge defaults
+  timeout follows the 2500 ms beat deadline, with a 200 ms minimum; judge defaults
   to 700 ms with a 50 ms minimum.
-- Default model, intentional-empty and follow-up deadlines are 900/1500/2500 ms.
-  Model timeout may use a beat. Deliberate rider silence never uses a beat.
+- Default model, intentional-empty and follow-up deadlines are 2500/2500/2500 ms. With the jev read only a caller in
+  distress or a goodbye suppresses the fallback beat; every other silent pick still gets it.
+- The default engine is `turn`: nothing is asked here. The turn service's reply to the early end-of-turn
+  signal carries the line (`ProcessEventsResponse.filler`); the driver hands it to `Source::offer`, which
+  keeps it only while that utterance is still the one being waited on. The hold plays it when it opens, after
+  the same guard as every front line. No line offered (or an empty one) leaves the timed beat as the last resort.
+  Model timeout may use a beat.
   Sticky distress clears only after a desk answer. A source emits at most its
   first line and one subsequent wait beat; the admission gap can suppress either.
 - Line detection binds the first qualifying **STT turn**, retaining its original
