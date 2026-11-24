@@ -18,7 +18,14 @@ impl Default for TtsConfig {
         }
     }
 }
+/// Deepgram's Flux voices are named `flux-*` and are served by Speak v2; every other
+/// model is served by Speak v1.
+pub const FLUX_PREFIX: &str = "flux-";
 impl TtsConfig {
+    /// Whether this voice is spoken by the Speak v2 (Flux) socket.
+    pub fn is_flux(&self) -> bool {
+        self.model.starts_with(FLUX_PREFIX)
+    }
     /// Build the ordered Speak query without an HTTP-only container option.
     pub fn query(&self) -> Vec<(String, String)> {
         vec![

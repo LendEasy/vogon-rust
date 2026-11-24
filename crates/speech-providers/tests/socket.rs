@@ -613,3 +613,121 @@ async fn configured_handshake_does_not_retry_auth_failure() {
     assert!(matches!(result,Err(e) if e.code=="provider_http_401"));
     server.await.unwrap();
 }
+
+fn flux() -> TtsConfig {
+    TtsConfig {
+        model: "flux-alexis-en".into(),
+        ..TtsConfig::default()
+    }
+}
+
+#[test]
+fn a_flux_voice_asked_of_the_default_endpoint_is_spoken_on_speak_v2() {
+    use vogon_speech_providers::client::{FLUX_TTS_ENDPOINT, TTS_ENDPOINT, speak_endpoint};
+    assert_eq!(speak_endpoint(TTS_ENDPOINT, &flux()), FLUX_TTS_ENDPOINT);
+    assert_eq!(
+        speak_endpoint(TTS_ENDPOINT, &TtsConfig::default()),
+        TTS_ENDPOINT
+    );
+    assert_eq!(
+        speak_endpoint("ws://127.0.0.1:9", &flux()),
+        "ws://127.0.0.1:9"
+    );
+}
+
+/// Speak v2: a turn's audio ends at SpeechMetadata, and Flushed arrives with audio still to
+/// come, so a frame after Flushed still belongs to the sentence being spoken.
+#[tokio::test]
+async fn flux_audio_is_indexed_by_ended_turns_and_a_cancel_interrupts_every_turn_owed() {
+    let (listener, url) = listen().await;
+    let server = tokio::spawn(async move {
+        let mut socket = accept_async(listener.accept().await.unwrap().0)
+            .await
+            .unwrap();
+        let (mut flushes, mut interrupts) = (0, 0);
+        while let Some(Ok(message)) = socket.next().await {
+            let Message::Text(text) = message else {
+                continue;
+            };
+            let v: Value = serde_json::from_str(&text).unwrap();
+            match v["type"].as_str() {
+                // the first reply's two sentences are spoken in full; later turns stay owed
+                Some("Flush") if flushes < 2 => {
+                    flushes += 1;
+                    let byte = flushes as u8;
+                    for frame in [
+                        Message::Binary(vec![byte; 320].into()),
+                        Message::Text(json!({"type":"Flushed"}).to_string().into()),
+                        Message::Binary(vec![byte; 320].into()),
+                        Message::Text(json!({"type":"SpeechMetadata"}).to_string().into()),
+                    ] {
+                        socket.send(frame).await.unwrap();
+                    }
+                }
+                // after the cancel (a warning, then one interrupt per owed sentence)
+                Some("Flush") if interrupts == 3 => {
+                    for frame in [
+                        Message::Binary(vec![9; 320].into()),
+                        Message::Text(json!({"type":"SpeechMetadata"}).to_string().into()),
+                    ] {
+                        socket.send(frame).await.unwrap();
+                    }
+                }
+                Some("Interrupt") => {
+                    interrupts += 1;
+                    // the first interrupt finds no audio yet and is answered with a warning
+                    let reply = if interrupts == 1 {
+                        json!({"type":"Warning","code":"NO_AUDIO_GENERATED"})
+                    } else {
+                        json!({"type":"SpeechInterrupted","audio_played_ms":0})
+                    };
+                    socket
+                        .send(Message::Text(reply.to_string().into()))
+                        .await
+                        .unwrap();
+                }
+                _ => {}
+            }
+        }
+        interrupts
+    });
+    let mut client = TtsClient::connect(&url, flux(), key(), Clock::default())
+        .await
+        .unwrap();
+    let mut stream = client
+        .stream_segments(vec!["a".into(), "b".into()])
+        .await
+        .unwrap();
+    let mut segments = vec![];
+    while let Some(event) = timeout(Duration::from_secs(2), stream.recv())
+        .await
+        .unwrap()
+    {
+        match event {
+            TtsOutput::Audio { chunk } => segments.push(chunk.segment),
+            TtsOutput::Finished => break,
+            _ => panic!("unexpected stream event"),
+        }
+    }
+    assert_eq!(segments, [0, 0, 1, 1]);
+    // nothing owed after a finished reply: a cancel has nothing to interrupt
+    assert_eq!(client.cancel().await, CancelOutcome::Cleared);
+    // two sentences owed, none answered: both are interrupted, one after a warning
+    let _owed = client
+        .stream_segments(vec!["c".into(), "d".into()])
+        .await
+        .unwrap();
+    assert_eq!(client.cancel().await, CancelOutcome::Cleared);
+    let mut next = client.stream("next".into()).await.unwrap();
+    if let TtsOutput::Audio { chunk } = timeout(Duration::from_secs(2), next.recv())
+        .await
+        .unwrap()
+        .unwrap()
+    {
+        assert_eq!(chunk.data, vec![9; 320]);
+    } else {
+        panic!("missing next audio")
+    }
+    client.close().await;
+    assert_eq!(server.await.unwrap(), 3);
+}

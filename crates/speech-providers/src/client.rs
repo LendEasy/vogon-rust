@@ -19,6 +19,17 @@ use vogon_clocks::Clock;
 
 pub const STT_ENDPOINT: &str = "wss://api.deepgram.com/v2/listen";
 pub const TTS_ENDPOINT: &str = "wss://api.deepgram.com/v1/speak";
+/// Speak v2, the socket Deepgram's Flux voices are served on.
+pub const FLUX_TTS_ENDPOINT: &str = "wss://api.deepgram.com/v2/speak";
+/// The socket a voice is spoken on: a Flux voice asked of the default Speak endpoint goes to
+/// v2. An injected endpoint (a loopback test server) is used as given.
+pub fn speak_endpoint(endpoint: &str, config: &TtsConfig) -> String {
+    if config.is_flux() && endpoint == TTS_ENDPOINT {
+        FLUX_TTS_ENDPOINT.into()
+    } else {
+        endpoint.into()
+    }
+}
 
 /// One socket's TurnInfo high-water mark. Suppress replay before callbacks receive
 /// fresh local timestamps/sequences; a later genuine turn with identical words
@@ -331,12 +342,21 @@ impl TtsClient {
         clock: Clock,
         retry: vogon_resilience::Policy,
     ) -> Result<Self> {
-        let mut socket = Socket::connect_retry(endpoint, &config.query(), &key, &retry).await?;
+        let endpoint = speak_endpoint(endpoint, &config);
+        // Speak v2 (Flux) differs in three ways the actor absorbs. A flush ends a TURN whose
+        // audio ends at SpeechMetadata (Flushed arrives with audio still to come), so that is
+        // the segment boundary. There is no Clear: Interrupt cancels only the active turn, so
+        // a cancel interrupts turn after turn until none is owed. And an Interrupt that finds
+        // no audio yet is answered with a Warning, after which it is sent again.
+        let flux = config.is_flux();
+        let mut socket = Socket::connect_retry(&endpoint, &config.query(), &key, &retry).await?;
         let (tx, mut commands) = mpsc::channel::<TtsCommand>(64);
         let actor_clock = clock.clone();
         let task = tokio::spawn(async move {
             let mut active: Option<Active> = None;
             let mut cancel: Option<(f64, oneshot::Sender<CancelOutcome>)> = None;
+            // Flux turns sent (text + flush) whose end the provider has not yet announced.
+            let mut owed: usize = 0;
             loop {
                 let wait = cancel
                     .as_ref()
@@ -348,17 +368,20 @@ impl TtsClient {
                         Some(TtsCommand::Start(segments,output,ack))=>{
                             if active.is_some()||cancel.is_some(){let _=ack.send(Err(Error::new("tts_busy")));continue;}
                             if segments.is_empty(){let _=output.send(TtsOutput::Finished);let _=ack.send(Ok(()));continue;}
-                            let state=TtsState::new(segments.len(),actor_clock.now());let mut sent=Ok(());
+                            let count=segments.len();
+                            let state=TtsState::new(count,actor_clock.now());let mut sent=Ok(());
                             for text in segments{
                                 if let Err(e)=socket.writer.send(Message::Text(json!({"type":"Speak","text":text}).to_string().into())).await{sent=Err(e);break;}
                                 if let Err(e)=socket.writer.send(Message::Text(json!({"type":"Flush"}).to_string().into())).await{sent=Err(e);break;}
                             }
-                            if sent.is_ok(){active=Some(Active{state,output});}let failed=sent.is_err();let _=ack.send(sent);if failed{break;}
+                            if sent.is_ok(){active=Some(Active{state,output});if flux{owed+=count;}}let failed=sent.is_err();let _=ack.send(sent);if failed{break;}
                         },
                         Some(TtsCommand::Cancel(ack))=>{
                             if cancel.is_some(){let _=ack.send(CancelOutcome::Disconnected);continue;}
                             if let Some(old)=active.take(){let _=old.output.send(TtsOutput::Cancelled);}
-                            if socket.writer.send(Message::Text(json!({"type":"Clear"}).to_string().into())).await.is_err(){let _=ack.send(CancelOutcome::Disconnected);break;}
+                            if flux&&owed==0{let _=ack.send(CancelOutcome::Cleared);continue;}
+                            let stop=if flux{"Interrupt"}else{"Clear"};
+                            if socket.writer.send(Message::Text(json!({"type":stop}).to_string().into())).await.is_err(){let _=ack.send(CancelOutcome::Disconnected);break;}
                             cancel=Some((actor_clock.now()+0.3,ack));
                         },
                         Some(TtsCommand::Close(ack))=>{let _=socket.writer.send(Message::Close(None)).await;let _=ack.send(());break;},
@@ -369,7 +392,18 @@ impl TtsClient {
                         Some(WireEvent::Text(text))=>{
                             if let Ok(value)=serde_json::from_str::<Value>(&text){match value["type"].as_str(){
                                 Some("Cleared")=>{if let Some((_,ack))=cancel.take(){let _=ack.send(CancelOutcome::Cleared);}},
-                                Some("Flushed")=>{if cancel.is_none() && let Some(current)=active.as_mut(){current.state.control("Flushed");if current.state.done(){let finished=active.take().unwrap();let _=finished.output.send(TtsOutput::Finished);}}},
+                                Some("Flushed") if !flux=>{if cancel.is_none() && let Some(current)=active.as_mut(){current.state.control("Flushed");if current.state.done(){let finished=active.take().unwrap();let _=finished.output.send(TtsOutput::Finished);}}},
+                                Some("SpeechMetadata"|"SpeechInterrupted") if flux=>{
+                                    owed=owed.saturating_sub(1);
+                                    if cancel.is_some(){
+                                        if owed==0{if let Some((_,ack))=cancel.take(){let _=ack.send(CancelOutcome::Cleared);}}
+                                        else if socket.writer.send(Message::Text(json!({"type":"Interrupt"}).to_string().into())).await.is_err(){break;}
+                                    } else if let Some(current)=active.as_mut(){current.state.control("Flushed");if current.state.done(){let finished=active.take().unwrap();let _=finished.output.send(TtsOutput::Finished);}}
+                                },
+                                Some("Warning") if flux&&cancel.is_some()=>{
+                                    time::sleep(Duration::from_millis(20)).await;
+                                    if socket.writer.send(Message::Text(json!({"type":"Interrupt"}).to_string().into())).await.is_err(){break;}
+                                },
                                 Some("Error")=>{if let Some(old)=active.take(){let _=old.output.send(TtsOutput::Failed{error:Error::new("tts_provider_error")});}break;},
                                 _=>{},
                             }}
@@ -399,7 +433,7 @@ impl TtsClient {
             task,
             config,
             key,
-            endpoint: endpoint.into(),
+            endpoint,
             retry,
             clock,
         })
