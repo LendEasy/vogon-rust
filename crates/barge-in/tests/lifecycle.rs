@@ -40,6 +40,63 @@ fn deadline_keeps_one_physical_request_and_duplicate_results_are_ignored() {
     assert!(!c.worker_active());
 }
 
+/// Call 15573a7b (2026-11-24): the judge said YIELD for "Actually," while the caller was already
+/// at "Actually, I have this", so the verdict was discarded and the agent talked on for 1.6 s. A
+/// YIELD for earlier words of the same, still undecided attempt takes the floor.
+#[test]
+fn a_yield_for_earlier_words_of_the_same_attempt_takes_the_floor() {
+    let mut c = controller();
+    c.frame(3000, 1200, 20.0, true);
+    c.transcript("Actually,", false);
+    let request = c.begin_classification().unwrap();
+    c.now += 0.24;
+    c.transcript("Actually, I have this", false);
+    assert!(c.classifier_result(request.token, ClassifierResult::Verdict("YIELD".into())));
+    assert!(c.caller_floor);
+}
+
+/// A YIELD for words the transcript has since rewritten is discarded: they are no longer what
+/// the caller said (the Python baseline's GAP-04).
+#[test]
+fn a_yield_for_words_since_rewritten_is_discarded() {
+    let mut c = controller();
+    c.frame(3000, 1200, 20.0, true);
+    c.transcript("the amount seems", false);
+    let request = c.begin_classification().unwrap();
+    c.now += 0.24;
+    c.transcript("that sounds reasonable", false);
+    assert!(c.classifier_result(request.token, ClassifierResult::Verdict("YIELD".into())));
+    assert!(!c.caller_floor);
+}
+
+/// The other verdicts for earlier words are still discarded: more words can end a backchannel.
+#[test]
+fn a_continue_for_earlier_words_is_still_discarded() {
+    let mut c = controller();
+    c.frame(3000, 1200, 20.0, true);
+    c.transcript("short fragment", false);
+    let request = c.begin_classification().unwrap();
+    c.now += 0.24;
+    c.transcript("short fragment that goes on", false);
+    assert!(c.classifier_result(request.token, ClassifierResult::Verdict("CONTINUE".into())));
+    assert!(!c.caller_floor);
+    // the newer words are judged in their own right
+    assert_eq!(c.begin_classification().unwrap().text, "short fragment that goes on");
+}
+
+/// A YIELD for earlier words does not override a decision the newer words already produced.
+#[test]
+fn a_yield_for_earlier_words_does_not_override_a_newer_decision() {
+    let mut c = controller();
+    c.frame(3000, 1200, 20.0, true);
+    c.transcript("short fragment", false);
+    let request = c.begin_classification().unwrap();
+    c.now += 0.24;
+    c.transcript("okay", false);
+    assert!(c.classifier_result(request.token, ClassifierResult::Verdict("YIELD".into())));
+    assert!(!c.caller_floor);
+}
+
 /// Prove bounded visible history does not free an episode still referenced by a
 /// provider, and that draining the provider releases the evicted episode afterward.
 #[test]

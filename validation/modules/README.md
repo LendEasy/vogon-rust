@@ -17,7 +17,7 @@ binary, and no wrappers are timed.
 |---|---|
 | Contracts/configuration | 1,732 parity cases passed |
 | Playback | 2,390 parity cases passed |
-| Barge-in/floor | 1,828 parity cases and five native lifecycle tests passed |
+| Barge-in/floor | 1,828 parity cases and nine native lifecycle tests passed |
 
 Contract coverage includes all types, required/omitted fields, explicit nulls,
 defaults, unknown fields, tagged unions, nested structures, typed roundtrips,

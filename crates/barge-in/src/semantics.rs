@@ -26,6 +26,12 @@ pub fn normalize(text:&str)->String {
     let s=s.split_whitespace().collect::<Vec<_>>().join(" ");
     s.trim_end_matches(['.','!','?']).trim().into()
 }
+/// Whether `later` is `earlier` with more words after it: the same speech, carried on. A
+/// transcript that was rewritten, or only repunctuated, is not a continuation.
+pub fn continues(earlier:&str, later:&str)->bool {
+    let first=normalize(earlier);
+    !first.is_empty() && normalize(later).starts_with(&format!("{first} "))
+}
 /// Test normalized substring membership; an empty normalized needle matches, as in Python.
 pub fn contains(text:&str, needle:&str)->bool {normalize(text).contains(&normalize(needle))}
 /// Text-only policy supplied by the application and current playout.

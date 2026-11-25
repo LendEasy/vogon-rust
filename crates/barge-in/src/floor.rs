@@ -640,7 +640,8 @@ impl Controller {
     /// False means no matching active token (or an already-applied timeout).
     /// True means the outcome was consumed, not necessarily that its verdict was
     /// applied: changed revision/generation/audio, caller ownership or ended
-    /// playback reject the answer. Invalid verdict strings become uncertain.
+    /// playback reject the answer, except a YIELD for earlier words of an attempt
+    /// that is still current, still undecided and has only gained words since. Invalid verdict strings become uncertain.
     /// A completion after timeout only drains the slot and emits late-result
     /// telemetry. Dispatch of pending work remains a separate host operation.
     pub fn classifier_result(&mut self,token:u64,result:ClassifierResult)->bool {
@@ -656,7 +657,23 @@ impl Controller {
                 ClassifierResult::Error=>("UNCERTAIN","classifier_error"),
                 ClassifierResult::Verdict(v)=>(v.as_str(),"classifier_result"),
             };
-            if f.request.key!=self.key(id)||self.caller_floor||!self.active_playback() {
+            // A YIELD for EARLIER WORDS of the same attempt still stands when the caller has only kept
+            // talking since: the words judged are still there with more after them, and nothing newer
+            // has decided the attempt. More of the same speech does not make "the caller wants the
+            // floor" less true. The judge answers in 320-680 ms and a partial arrives about every
+            // 240 ms, so on a caller who keeps talking every verdict was for an older partial and was
+            // thrown away; the cut then waited for the persistent-speech rule (call 15573a7b,
+            // 2026-11-24: the judge said YIELD to "Actually," 0.44 s before the agent stopped).
+            // Two things are NOT carried forward: a verdict for words the transcript has since
+            // REWRITTEN (they are no longer what the caller said), and a CONTINUE (more words can
+            // end a backchannel).
+            let current=self.key(id);
+            let earlier_words=f.request.key!=current&&decision=="YIELD"
+                &&f.request.key.2==current.2&&f.request.key.3==current.3&&f.request.key.1<current.1
+                &&self.current==Some(id)&&{let e=&self.episodes[&id];e.decision==Decision::Uncertain&&!e.echo&&!e.possible_echo
+                    &&semantics::continues(&f.request.text,&e.text)};
+            if earlier_words {reason="classifier_result_earlier_words";}
+            if (f.request.key!=current&&!earlier_words)||self.caller_floor||!self.active_playback() {
                 self.emit("floor_result_rejected","stale_revision_or_generation",Some(id),json!({"request_revision":f.request.key.1,"request_generation":f.request.key.2}));
             } else {
                 if !matches!(decision,"CONTINUE"|"YIELD"|"UNCERTAIN") {decision="UNCERTAIN";reason="invalid_classifier_result";}
