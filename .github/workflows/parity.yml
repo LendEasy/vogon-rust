@@ -23,7 +23,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: LendEasy/vogon
-          ref: 9874449e9f10c536d691301ec071873049d6bc62
+          ref: ba2d088524546e52cd255f98de49c2363e7f5222
           path: voice-gateway
       - uses: actions/checkout@v4
         with:
