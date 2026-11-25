@@ -28,7 +28,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: LendEasy/vogon-contract
-          ref: eb312e02b38ee932893bf825b441967302a65c9c
+          ref: a4a9f31dac05d0402e578999aa47a8ce6f735347
           path: vogon-contract
       - uses: actions/checkout@v4
         with:

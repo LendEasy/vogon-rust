@@ -835,7 +835,10 @@ async fn phone_line_with_no_first_audio_is_spoken_on_a_fresh_socket() {
             if let Message::Text(text) = message {
                 let value: Value = serde_json::from_str(&text).unwrap();
                 if value["type"] == "Speak" {
-                    captured.lock().await.push(value["text"].as_str().unwrap().into());
+                    captured
+                        .lock()
+                        .await
+                        .push(value["text"].as_str().unwrap().into());
                 }
             }
         }
@@ -844,7 +847,10 @@ async fn phone_line_with_no_first_audio_is_spoken_on_a_fresh_socket() {
         while let Some(Ok(Message::Text(text))) = next.next().await {
             let value: Value = serde_json::from_str(&text).unwrap();
             match value["type"].as_str() {
-                Some("Speak") => captured.lock().await.push(value["text"].as_str().unwrap().into()),
+                Some("Speak") => captured
+                    .lock()
+                    .await
+                    .push(value["text"].as_str().unwrap().into()),
                 Some("Flush") => {
                     next.send(Message::Binary(vec![255; 480].into()))
                         .await
