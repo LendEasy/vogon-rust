@@ -110,6 +110,10 @@ pub trait Store: Send + Sync {
     fn claim(&self, key: Key, owner: String) -> Future<'_, bool>;
     /// Release only the matching owner; other owners are unaffected.
     fn release(&self, key: Key, owner: String) -> Future<'_, ()>;
+    /// The Redis client this store connected at startup, for other Redis users in the same process.
+    fn redis_client(&self) -> Option<vogon_redis::Client> {
+        None
+    }
 }
 struct Entry {
     record: Record,
@@ -350,6 +354,9 @@ impl Redis {
     }
 }
 impl Store for Redis {
+    fn redis_client(&self) -> Option<vogon_redis::Client> {
+        Some(self.connection.clone())
+    }
     fn create(&self, mut r: Record) -> Future<'_, ()> {
         boxed(async move {
             if r.created_at_utc == 0. {

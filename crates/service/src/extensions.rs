@@ -78,11 +78,82 @@ impl Hooks for CallHooks {
     }
     fn finish(&self, id: String, reason: String) -> Future<'_, ()> {
         boxed(async move {
-            self.transfers
+            // The call's own end-of-call work runs whatever the transfer store answers; its failure
+            // is still returned.
+            let discarded = self
+                .transfers
                 .discard_prepared(&self.record.provider_call_id)
-                .await
-                .map_err(|e| Error::new(e.0))?;
-            self.next.finish(id, reason).await
+                .await;
+            let finished = self.next.finish(id, reason).await;
+            discarded.map_err(|e| Error::new(e.0))?;
+            finished
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+
+    struct Finished(AtomicBool);
+    impl Hooks for Finished {
+        fn configure(&self, _: CallConfig) -> Future<'_, ()> {
+            boxed(async { Ok(()) })
+        }
+        fn escalate(&self, _: EscalationOrder) -> Future<'_, Value> {
+            boxed(async { Ok(json!({})) })
+        }
+        fn finish(&self, _: String, _: String) -> Future<'_, ()> {
+            self.0.store(true, Ordering::SeqCst);
+            boxed(async { Ok(()) })
+        }
+    }
+
+    /// Production 2026-11-26 (call e5b7b2eb): a transfer-store timeout at call end returned before the
+    /// next finish hook ran, so the call's own end-of-call work was skipped as well as reported failed.
+    #[tokio::test]
+    async fn a_transfer_store_failure_at_call_end_still_runs_the_next_finish_hook() {
+        let unreachable = vogon_escalation::Store::redis("redis://127.0.0.1:1/")
+            .unwrap()
+            .with_retry(vogon_resilience::Policy::once());
+        let policy = vogon_resilience::Policy::once();
+        let transfers = vogon_escalation::Manager::new(
+            vogon_escalation::Config {
+                endpoint: String::new(),
+                account: String::new(),
+                token: String::new(),
+                from: String::new(),
+                public_base: String::new(),
+                say_voice: String::new(),
+                tts_endpoint: String::new(),
+                tts_key: String::new(),
+                timeout: Duration::from_secs(1),
+                retry_delays: vec![],
+                report_retry: None,
+                rest_retry: policy.clone(),
+                tts_retry: policy,
+            },
+            unreachable,
+        )
+        .unwrap();
+        let record = Record::decode(
+            &json!({"tenant":"t","call_id":"c","session_token":"s","mode":"twilio",
+            "provider_call_id":"CA0123"})
+            .to_string(),
+        )
+        .unwrap();
+        let next = Arc::new(Finished(AtomicBool::new(false)));
+        let hooks = CallHooks::new(transfers, record, next.clone());
+        let outcome = hooks.finish("c".into(), "caller_farewell".into()).await;
+        assert!(
+            outcome.is_err(),
+            "the transfer-store failure is still reported"
+        );
+        assert!(
+            next.0.load(Ordering::SeqCst),
+            "the next finish hook was skipped"
+        );
     }
 }

@@ -388,3 +388,77 @@ async fn transfer_redis_cas_is_atomic_across_clients() {
             .unwrap()
     );
 }
+
+/// Forwards the first connection at once and holds every later one for `hold` before forwarding:
+/// a Redis that keeps serving its established connection while new connections cannot come up in time.
+async fn first_connection_only_proxy(upstream: String, hold: Duration) -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let mut accepted = 0usize;
+        while let Ok((mut inbound, _)) = listener.accept().await {
+            let wait = if accepted == 0 { Duration::ZERO } else { hold };
+            accepted += 1;
+            let upstream = upstream.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(wait).await;
+                if let Ok(mut outbound) = tokio::net::TcpStream::connect(upstream).await {
+                    let _ = tokio::io::copy_bidirectional(&mut inbound, &mut outbound).await;
+                }
+            });
+        }
+    });
+    format!("redis://{address}")
+}
+
+/// Production 2026-11-26 (call e5b7b2eb): the session store answered the hang-up callback while every
+/// transfer-store read logged `deadline_exceeded connected=false waited_ms=5000`, and the farewell call
+/// was finalized `failed` with `transfer_store_timeout`. The transfer store opened its own second
+/// connection inside each 5 s command deadline; the session store's established one was never used.
+#[tokio::test]
+async fn transfer_store_reads_over_the_session_stores_established_connection() {
+    if std::env::var_os("VOGON_TEST_REDIS_CLUSTER_URL").is_some() {
+        return; // the proxy below speaks to one standalone node
+    }
+    let (_unused, server) = backend(true, Ttl::default()).await;
+    let upstream = server
+        .as_ref()
+        .unwrap()
+        .1
+        .trim_start_matches("redis://")
+        .to_owned();
+    let url = first_connection_only_proxy(upstream, Duration::from_secs(6)).await;
+    let sessions: SharedStore = Arc::new(
+        Redis::connect_mode(
+            &url,
+            Ttl::default(),
+            vogon_resilience::Policy::once(),
+            false,
+        )
+        .await
+        .unwrap(),
+    );
+    let config = vogon_service::bootstrap::Config::resolve(
+        &json!({"GATEWAY_SESSION_STORE":"redis", "REDIS_URL":url, "FRONT_MODEL_ENABLED":"false",
+        "RECORDING_ENABLED":"false", "GATEWAY_SERVICE_KEY":"transfer-test-key"}),
+        &json!({}),
+    )
+    .unwrap();
+    let service = vogon_service::host::Service::new(config, sessions.clone()).unwrap();
+    let started = std::time::Instant::now();
+    let read = service.transfers.audio(&"0".repeat(32)).await;
+    assert!(
+        matches!(read, Ok(None)),
+        "a transfer read failed with {:?} after {:?} while the session store was connected",
+        read.err().map(|e| e.0),
+        started.elapsed()
+    );
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert!(
+        sessions
+            .lookup(false, "no-such-token".into())
+            .await
+            .unwrap()
+            .is_none()
+    );
+}

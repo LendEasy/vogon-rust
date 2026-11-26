@@ -112,11 +112,17 @@ impl Service {
             }
         }
         let transfer_store = if config.gateway["session_store"] == "redis" {
-            vogon_escalation::Store::redis_mode(
-                config.settings["redis_url"].as_str().unwrap_or(""),
-                config.settings["redis_cluster_mode"] == true,
-            )
-            .map_err(|e| Error::new(e.0))?
+            // The session store's client was connected at startup; a second client of the transfer
+            // store's own would first connect inside a 5 s command deadline (production 2026-11-26:
+            // every transfer read timed out with no connection while the session store answered).
+            match store.redis_client() {
+                Some(client) => vogon_escalation::Store::shared(client),
+                None => vogon_escalation::Store::redis_mode(
+                    config.settings["redis_url"].as_str().unwrap_or(""),
+                    config.settings["redis_cluster_mode"] == true,
+                )
+                .map_err(|e| Error::new(e.0))?,
+            }
             .with_retry(config.retries.redis.clone())
         } else {
             vogon_escalation::Store::default()

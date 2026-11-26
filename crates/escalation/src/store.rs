@@ -42,6 +42,15 @@ impl Store {
             }),
         })
     }
+    /// Use a Redis client another store already owns, so its established connection serves transfers too.
+    /// A second client of its own would connect lazily inside each command's deadline, and a connect
+    /// that needs longer than that is cancelled and restarted every time and never comes up.
+    pub fn shared(client: vogon_redis::Client) -> Self {
+        Self {
+            retry: vogon_resilience::Policy::once(),
+            backend: Arc::new(Backend::Redis { client }),
+        }
+    }
     /// Set retries for safe reads and connection establishment, never replay ambiguous CAS writes.
     pub fn with_retry(mut self, retry: vogon_resilience::Policy) -> Self {
         self.retry = retry;
